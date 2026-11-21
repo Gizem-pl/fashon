@@ -809,15 +809,47 @@ function renderProfile() {
       <p class="hint">Garment measurements in cm, flat-doubled (full circumference).</p>
     </section>
 
+    <section class="card">
+      <h2 class="section-h">Backup &amp; export</h2>
+      <p class="hint">Your photos live only on this device. Save a backup file regularly — to iCloud Drive or Files — so you can restore them on a new phone or if Safari clears its data.</p>
+      <button class="btn primary wide" data-act="export-backup">Export full backup (.json)</button>
+      <button class="btn ghost wide" data-act="export-csv">Export closet list (.csv)</button>
+      <label class="btn ghost wide">Restore from backup<input type="file" id="restore-input" accept="application/json,.json" hidden></label>
+      <p class="hint" id="backup-status"></p>
+    </section>
+
     <button class="btn ghost wide" data-act="reset-profile">Reset to my starting profile</button>
     <p class="hint center" id="profile-saved"></p>
   `;
 }
 
+/** Share sheet on iPhone (Save to Files / iCloud Drive); normal download elsewhere. */
+async function deliverFile(blob, filename) {
+  const file = new File([blob], filename, { type: blob.type });
+  if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: filename }); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
 function wireProfile() {
   const v = $('#view-profile');
   let t;
-  v.addEventListener('change', e => {
+  v.addEventListener('change', async e => {
+    if (e.target.id === 'restore-input') {
+      const f = e.target.files?.[0]; e.target.value = '';
+      if (!f) return;
+      const replace = confirm('Restore this backup?\n\nOK = replace everything on this device with the backup.\nCancel = choose merge instead.');
+      const merge = !replace && confirm('Merge the backup into your current closet (keeps what you have)?');
+      if (!replace && !merge) return;
+      const st = $('#backup-status'); if (st) st.textContent = 'Restoring…';
+      try {
+        const r = await S.restoreBackup(f, replace ? 'replace' : 'merge');
+        refreshItems(); renderProfile(); toast(`Restored ${r.items} pieces`);
+      } catch (err) { if (st) st.textContent = err.message || 'Restore failed.'; }
+      return;
+    }
     const k = e.target.dataset?.p; if (!k) return;
     const p = S.getProfile();
     const val = e.target.type === 'number' ? parseFloat(e.target.value) : e.target.value;
@@ -826,7 +858,21 @@ function wireProfile() {
     const n = $('#profile-saved'); if (n) { n.textContent = 'Saved ✓'; clearTimeout(t); t = setTimeout(() => { n.textContent = ''; }, 1500); }
     if (e.target.type === 'number') renderProfile();
   });
-  v.addEventListener('click', e => {
+  v.addEventListener('click', async e => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'export-backup' || act === 'export-csv') {
+      const st = $('#backup-status');
+      try {
+        if (st) st.textContent = 'Preparing…';
+        const out = act === 'export-csv' ? S.createCSV() : await S.createBackup();
+        await deliverFile(out.blob, out.filename);
+        if (st) st.textContent = act === 'export-csv' ? 'Closet list exported.' : `Backup ready · ${out.count} piece${out.count === 1 ? '' : 's'} with photos.`;
+      } catch (err) {
+        if (err?.name !== 'AbortError' && st) st.textContent = 'Export failed: ' + (err.message || err);
+        else if (st) st.textContent = '';
+      }
+      return;
+    }
     if (e.target.closest('[data-act="reset-profile"]') && confirm('Reset all profile values to your starting profile?')) {
       S.resetProfile(); localStorage.removeItem('qc.profile.v1'); renderProfile(); toast('Profile reset');
     }

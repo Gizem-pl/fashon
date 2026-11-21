@@ -232,3 +232,60 @@ export async function colorFromFile(file) {
   const { color, contrast } = await processPhoto(file);
   return { ...color, contrast };
 }
+
+/* ---------- Backup / restore ---------- */
+
+const BACKUP_VERSION = 1;
+
+function blobToDataURL(blob) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
+}
+async function dataURLToBlob(url) { return (await fetch(url)).blob(); }
+
+/** Build a single JSON backup file (metadata + photos as data URLs). Returns { blob, filename, count }. */
+export async function createBackup() {
+  const items = getItems();
+  const photos = {};
+  for (const it of items) {
+    try { const b = await getPhoto(it.id); if (b) photos[it.id] = await blobToDataURL(b); } catch (e) { console.warn('photo skipped', it.id, e); }
+  }
+  const data = { app: 'quiet-closet', version: BACKUP_VERSION, exportedAt: new Date().toISOString(), items, profile: read(LS.profile, {}), looks: getLooks(), checks: getChecks(), photos };
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  return { blob, filename: `quiet-closet-backup-${new Date().toISOString().slice(0, 10)}.json`, count: items.length };
+}
+
+/** Plain-text/CSV list of the closet (no photos) for reading in Numbers/Excel. */
+export function createCSV() {
+  const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const head = ['Name', 'Category', 'Type', 'Colour', 'Hex', 'Contrast', 'Silhouette', 'Vibe', 'Scent mood', 'Fabric', 'Notes'];
+  const rows = getItems().map(i => [i.name, i.category, i.subtype, i.color?.name, i.color?.hex, i.contrast, i.silhouette, (i.vibe || []).join('; '), i.scentMood, i.fabric, i.notes].map(q).join(','));
+  return { blob: new Blob([[head.map(q).join(','), ...rows].join('\n')], { type: 'text/csv' }), filename: 'quiet-closet-items.csv' };
+}
+
+/** Restore from a backup file. mode: 'merge' (keep existing, add/overwrite by id) or 'replace'. */
+export async function restoreBackup(file, mode = 'merge') {
+  let data;
+  try { data = JSON.parse(await file.text()); } catch { throw new Error('That file is not a valid backup.'); }
+  if (data?.app !== 'quiet-closet' || !Array.isArray(data.items)) throw new Error('That does not look like a Quiet Closet backup.');
+
+  if (mode === 'replace') {
+    for (const it of getItems()) { revokePhotoURL(it.id); try { await deletePhoto(it.id); } catch {} }
+    write(LS.items, []); write(LS.looks, []); write(LS.checks, []);
+  }
+  const byId = new Map(getItems().map(i => [i.id, i]));
+  let photosRestored = 0;
+  for (const it of data.items) {
+    const url = data.photos?.[it.id];
+    if (url) { await putPhoto(it.id, await dataURLToBlob(url)); revokePhotoURL(it.id); photosRestored++; }
+    byId.set(it.id, it);
+  }
+  write(LS.items, [...byId.values()]);
+  const mergeList = (key, incoming) => {
+    const cur = read(key, []); const ids = new Set(cur.map(x => x.id));
+    write(key, [...cur, ...(incoming || []).filter(x => !ids.has(x.id))]);
+  };
+  mergeList(LS.looks, data.looks); mergeList(LS.checks, data.checks);
+  if (data.profile && Object.keys(data.profile).length && (mode === 'replace' || !Object.keys(read(LS.profile, {})).length)) write(LS.profile, data.profile);
+  await preloadPhotos(data.items.map(i => i.id));
+  return { items: data.items.length, photos: photosRestored };
+}
