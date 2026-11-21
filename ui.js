@@ -15,6 +15,7 @@ const FINISH_CATS = [
   { key: 'perfume', cat: 'perfume', label: 'Perfume' },
   { key: 'makeup',  cat: 'makeup',  label: 'Makeup look' },
   { key: 'nails',   cat: 'nails',   label: 'Nail polish' },
+  { key: 'legwear', cat: 'legwear', label: 'Tights / socks' },
   { key: 'belt',    cat: 'belts',   label: 'Belt' },
   { key: 'jewelry', cat: 'jewelry', label: 'Jewelry / accessories' },
   { key: 'hair',    cat: 'hair',    label: 'Hair accessory' }
@@ -139,6 +140,7 @@ function renderStudio() {
     </details>
 
     <button class="btn primary wide big" data-act="generate">Style Me</button>
+    <button class="btn ghost wide" data-act="start-over">Start over</button>
 
     <div id="studio-results"></div>
     <div id="studio-saved"></div>
@@ -213,6 +215,19 @@ function renderSavedLooks() {
       </details>`).join('')}`;
 }
 
+/** Drop looks that no longer match the current inputs. */
+function staleResult() {
+  if (state.studio.result) { state.studio.result = null; renderResults(); }
+}
+
+function startOver() {
+  const s = state.studio;
+  s.core.clear(); s.moodText = ''; s.moodChip = ''; s.finish = {}; s.result = null; s.openFinish = false; s.pickFilter = 'all';
+  renderStudio();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  toast('Cleared — start fresh');
+}
+
 function generate(surprise = false) {
   const s = state.studio;
   const all = state.items;
@@ -238,20 +253,23 @@ function wireStudio() {
     const s = state.studio;
     switch (b.dataset.act) {
       case 'goto-closet': showTab('closet'); break;
+      case 'start-over': startOver(); break;
       case 'pick-filter': s.pickFilter = b.dataset.cat; renderPicker(); break;
       case 'toggle-core': {
         const id = b.dataset.id;
         s.core.has(id) ? s.core.delete(id) : s.core.add(id);
         b.classList.toggle('on', s.core.has(id)); b.setAttribute('aria-pressed', s.core.has(id));
         const n = s.core.size; $('#core-count').textContent = n ? `${n} core piece${n > 1 ? 's' : ''} selected` : 'Nothing selected yet';
+        staleResult();
         break;
       }
-      case 'clear-core': s.core.clear(); renderPicker(); break;
+      case 'clear-core': s.core.clear(); renderPicker(); staleResult(); break;
       case 'surprise': generate(true); break;
       case 'generate': generate(false); break;
       case 'mood-chip': {
         s.moodChip = s.moodChip === b.dataset.mood ? '' : b.dataset.mood;
         $$('#mood-chips .chip').forEach(c => c.classList.toggle('on', c.dataset.mood === s.moodChip));
+        staleResult();
         break;
       }
       case 'save-look': {
@@ -269,12 +287,13 @@ function wireStudio() {
   v.addEventListener('input', e => {
     if (e.target.id === 'mood-text') {
       state.studio.moodText = e.target.value;
+      staleResult();
       if (e.target.value && state.studio.moodChip) { /* free text refines, chip stays */ }
     }
   });
   v.addEventListener('change', e => {
     const k = e.target.dataset?.finish;
-    if (k) state.studio.finish[k] = e.target.value;
+    if (k) { state.studio.finish[k] = e.target.value; staleResult(); }
   });
   v.addEventListener('toggle', e => { if (e.target.id === 'finish-fold') state.studio.openFinish = e.target.open; }, true);
 }

@@ -8,6 +8,7 @@ export const CATEGORIES = [
   { id: 'dresses',  label: 'Dresses',                  slot: 'dress',   subtypes: ['Mini', 'Midi', 'Maxi'] },
   { id: 'outerwear',label: 'Outerwear',                slot: 'outer',   subtypes: ['Coat', 'Trench', 'Puffer', 'Jacket'] },
   { id: 'shoes',    label: 'Shoes',                    slot: 'shoes',   subtypes: ['Boots', 'Loafers', 'Heels', 'Flats', 'Sneakers'] },
+  { id: 'legwear',  label: 'Tights & Socks',           slot: 'legwear', subtypes: ['Tights', 'Socks'] },
   { id: 'belts',    label: 'Belts',                    slot: 'belt',    subtypes: [] },
   { id: 'jewelry',  label: 'Jewelry & Accessories',    slot: 'jewelry', subtypes: ['Earrings', 'Necklace', 'Bracelet / Watch', 'Ring', 'Scarf', 'Bag'] },
   { id: 'hair',     label: 'Hair Accessories',         slot: 'hair',    subtypes: [] },
@@ -435,11 +436,12 @@ function makeupNote(finish, mood) {
 
 function buildLookObject(title, tagline, outfit, finish, mood, intent) {
   const pieces = outfitPieces(outfit);
-  const accessories = ['belt', 'jewelry', 'hair', 'nails', 'makeup', 'perfume'].map(k => finish[k]).filter(Boolean);
+  const accessories = ['legwear', 'belt', 'jewelry', 'hair', 'nails', 'makeup', 'perfume'].map(k => finish[k]).filter(Boolean);
   const notes = [
     { label: 'Proportion & tuck', text: proportionNote(outfit, intent) },
     { label: 'Colour balance',    text: contrastNote(outfit) },
     { label: 'Layering',          text: layerNote(outfit, mood) },
+    { label: 'Legwear',           text: finish.legwear ? `${nm(finish.legwear)} links the shoes to the hem — keep it close to the ${finish.legwear.color?.name ? finish.legwear.color.name.toLowerCase() : 'palette'} of the look.` : '' },
     { label: 'Belt',              text: beltNote(finish, outfit, intent) },
     { label: 'Jewelry',           text: jewelryNote(finish, mood, intent, outfit) },
     { label: 'Hair',              text: hairNote(finish, mood, intent) },
