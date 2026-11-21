@@ -3,12 +3,12 @@
 /* ---------- Taxonomy ---------- */
 
 export const CATEGORIES = [
-  { id: 'tops',     label: 'Tops & Knitwear',          slot: 'top',     subtypes: ['Sweater / Knit', 'Blouse / Shirt', 'Tee / Tank', 'Cardigan', 'Blazer / Jacket'] },
-  { id: 'bottoms',  label: 'Bottoms (Skirts & Trousers)', slot: 'bottom', subtypes: ['Skirt', 'Trousers', 'Jeans', 'Shorts'] },
-  { id: 'dresses',  label: 'Dresses',                  slot: 'dress',   subtypes: ['Mini', 'Midi', 'Maxi'] },
-  { id: 'outerwear',label: 'Outerwear',                slot: 'outer',   subtypes: ['Coat', 'Trench', 'Puffer', 'Jacket'] },
-  { id: 'shoes',    label: 'Shoes',                    slot: 'shoes',   subtypes: ['Boots', 'Loafers', 'Heels', 'Flats', 'Sneakers'] },
-  { id: 'legwear',  label: 'Tights & Socks',           slot: 'legwear', subtypes: ['Tights', 'Socks'] },
+  { id: 'tops',     label: 'Tops & Knitwear',          slot: 'top',     subtypes: ['Sweater / Knit', 'Sleeveless Sweater / Vest', 'Turtleneck', 'Blouse / Shirt', 'Tee / Tank', 'Bodysuit', 'Corset / Bustier', 'Cardigan', 'Blazer / Jacket'] },
+  { id: 'bottoms',  label: 'Bottoms (Skirts & Trousers)', slot: 'bottom', subtypes: ['Skirt', 'Trousers', 'Jeans', 'Shorts', 'Leggings', 'Culottes', 'Cargo / Utility'] },
+  { id: 'dresses',  label: 'Dresses',                  slot: 'dress',   subtypes: ['Mini', 'Midi', 'Maxi', 'Slip', 'Wrap', 'Shirt dress', 'Knit dress'] },
+  { id: 'outerwear',label: 'Outerwear',                slot: 'outer',   subtypes: ['Coat', 'Trench', 'Puffer', 'Jacket', 'Leather jacket', 'Cape / Poncho', 'Gilet'] },
+  { id: 'shoes',    label: 'Shoes',                    slot: 'shoes',   subtypes: ['Boots', 'Ankle boots', 'Loafers', 'Heels', 'Flats', 'Sneakers', 'Sandals', 'Mules'] },
+  { id: 'legwear',  label: 'Tights & Socks',           slot: 'legwear', subtypes: ['Tights', 'Socks', 'Stockings'] },
   { id: 'belts',    label: 'Belts',                    slot: 'belt',    subtypes: [] },
   { id: 'jewelry',  label: 'Jewelry & Accessories',    slot: 'jewelry', subtypes: ['Earrings', 'Necklace', 'Bracelet / Watch', 'Ring', 'Scarf', 'Bag'] },
   { id: 'hair',     label: 'Hair Accessories',         slot: 'hair',    subtypes: [] },
@@ -18,7 +18,9 @@ export const CATEGORIES = [
 ];
 
 export const SILHOUETTES = ['Fitted', 'Relaxed', 'Voluminous'];
-export const VIBES = ['Old-Money', 'Effortless Chic', 'Cozy', 'Elevated'];
+export const VIBES = ['Old-Money', 'Effortless Chic', 'Cozy', 'Elevated', 'Minimal', 'Romantic', 'Edgy', 'Preppy', 'Bohemian', 'Sporty-Luxe', 'Evening', 'Casual'];
+export const THICKNESS = ['Light', 'Medium', 'Thick'];
+export const SLEEVES = ['Sleeved', 'Sleeveless'];
 export const SCENT_MOODS = ['Warm & Spicy', 'Woody', 'Bold Floral', 'Fresh & Clean'];
 export const CONTRASTS = ['Light', 'Medium', 'Dark'];
 export const MOODS = ['Quiet Luxury', 'Cozy & Polished', 'Effortless Chic', 'Sharp & Confident', 'Soft & Romantic'];
@@ -39,6 +41,168 @@ export function defaultTags(catId) {
     case 'shoes':     return { silhouette: '',          vibe: ['Elevated'], scentMood: '' };
     default:          return { silhouette: '',          vibe: ['Effortless Chic'], scentMood: '' };
   }
+}
+
+/* ---------- Fabric knowledge ---------- */
+/* thick: 1 light · 2 medium · 3 thick.  sheen: matte | soft | shiny.  Order matters: the first matching rule wins,
+   so specific fabrics (satin, cashmere) sit before generic ones. */
+
+export const FABRICS = [
+  { label: 'Cashmere',  re: /cashmere/i,                         thick: 2, sheen: 'matte', drape: 'soft',       warmth: 'warm', note: 'soft, matte and very warm' },
+  { label: 'Satin',     re: /satin|charmeuse/i,                  thick: 1, sheen: 'shiny', drape: 'fluid',      warmth: 'mild', note: 'shiny, fluid and light — it catches the light and shows every crease' },
+  { label: 'Silk',      re: /silk/i,                             thick: 1, sheen: 'soft',  drape: 'fluid',      warmth: 'mild', note: 'a soft glow, very fluid and light' },
+  { label: 'Chiffon',   re: /chiffon|georgette|organza/i,        thick: 1, sheen: 'matte', drape: 'fluid',      warmth: 'cool', note: 'sheer, airy and floaty' },
+  { label: 'Lace',      re: /lace/i,                             thick: 1, sheen: 'matte', drape: 'delicate',   warmth: 'cool', note: 'delicate and see-through — layer it over something plain' },
+  { label: 'Velvet',    re: /velvet|velour/i,                    thick: 2, sheen: 'soft',  drape: 'fluid',      warmth: 'warm', note: 'plush with a deep sheen that shifts in the light' },
+  { label: 'Corduroy',  re: /corduroy|cord\b/i,                  thick: 2, sheen: 'matte', drape: 'structured', warmth: 'warm', note: 'ribbed, matte and sturdy' },
+  { label: 'Tweed',     re: /tweed|bouclé|boucle/i,              thick: 2, sheen: 'matte', drape: 'structured', warmth: 'warm', note: 'nubbly, matte and structured' },
+  { label: 'Denim',     re: /denim/i,                            thick: 2, sheen: 'matte', drape: 'structured', warmth: 'mild', note: 'sturdy, matte and casual' },
+  { label: 'Faux leather', re: /faux leather|vegan leather|pleather|\bpu\b|polyurethane/i, thick: 2, sheen: 'shiny', drape: 'structured', warmth: 'warm', note: 'a smooth, shiny leather look that does not breathe' },
+  { label: 'Leather',   re: /leather/i,                          thick: 2, sheen: 'soft',  drape: 'structured', warmth: 'warm', note: 'structured with a soft sheen; blocks wind' },
+  { label: 'Suede',     re: /suede|nubuck/i,                     thick: 2, sheen: 'matte', drape: 'soft',       warmth: 'warm', note: 'velvety, matte and soft' },
+  { label: 'Faux fur',  re: /faux fur|shearling|sherpa|\bfur\b/i, thick: 3, sheen: 'soft', drape: 'soft',       warmth: 'warm', note: 'bulky, fluffy and very warm' },
+  { label: 'Fleece',    re: /fleece/i,                           thick: 3, sheen: 'matte', drape: 'soft',       warmth: 'warm', note: 'thick, soft and cosy' },
+  { label: 'Padded / Down', re: /\bdown (jacket|coat|fill|filled|feather)|padded|quilted|puffer/i,   thick: 3, sheen: 'soft',  drape: 'structured', warmth: 'warm', note: 'puffy, insulating and bulky' },
+  { label: 'Linen',     re: /linen/i,                            thick: 1, sheen: 'matte', drape: 'crisp',      warmth: 'cool', note: 'crisp, matte and cooling; it creases naturally' },
+  { label: 'Wool',      re: /wool|merino|lambswool|alpaca|mohair/i, thick: 2, sheen: 'matte', drape: 'structured', warmth: 'warm', note: 'matte, warm and breathable' },
+  { label: 'Cotton',    re: /cotton|poplin|chambray/i,           thick: 1, sheen: 'matte', drape: 'crisp',      warmth: 'mild', note: 'matte, breathable and easy to wear' },
+  { label: 'Jersey / Knit', re: /jersey|ribbed|rib knit|stretch knit/i, thick: 1, sheen: 'matte', drape: 'stretchy', warmth: 'mild', note: 'matte, stretchy and clingy' },
+  { label: 'Viscose',   re: /viscose|rayon|modal|lyocell|tencel/i, thick: 1, sheen: 'soft', drape: 'fluid',     warmth: 'cool', note: 'fluid with a gentle sheen; drapes like silk' },
+  { label: 'Polyester', re: /polyester|polyamide|nylon|synthetic/i, thick: 1, sheen: 'soft', drape: 'fluid',    warmth: 'mild', note: 'smooth and wrinkle-resistant; it does not breathe well' },
+  { label: 'Acrylic',   re: /acrylic/i,                          thick: 2, sheen: 'matte', drape: 'soft',       warmth: 'warm', note: 'a budget wool-style knit that can pill' },
+  { label: 'Canvas',    re: /canvas|twill/i,                     thick: 2, sheen: 'matte', drape: 'structured', warmth: 'mild', note: 'sturdy, matte and casual' },
+  { label: 'Sequin / Metallic', re: /sequin|metallic|lurex|glitter/i, thick: 2, sheen: 'shiny', drape: 'structured', warmth: 'mild', note: 'very shiny and attention-grabbing' }
+];
+
+/** Knowledge entry for a fabric label or any free text that mentions one (e.g. "80% merino wool"). */
+export function fabricInfo(text) {
+  const t = (text || '').trim();
+  if (!t) return null;
+  return FABRICS.find(f => f.re.test(t)) || null;
+}
+
+const T_RANK = { Light: 1, Medium: 2, Thick: 3 };
+const T_NAME = ['', 'Light', 'Medium', 'Thick'];
+const FORCE_THICK = { 'Tee / Tank': 1, 'Blouse / Shirt': 1, 'Bodysuit': 1, 'Corset / Bustier': 1, 'Slip': 1, 'Leggings': 1, 'Shorts': 1,
+  'Tights': 1, 'Socks': 1, 'Stockings': 1, 'Coat': 3, 'Puffer': 3, 'Trench': 2, 'Gilet': 2, 'Cape / Poncho': 2 };
+const MIN_THICK = { 'Sweater / Knit': 2, 'Turtleneck': 2, 'Cardigan': 2, 'Knit dress': 2 };
+
+/** Light / Medium / Thick suggested from the fabric and the type of piece. */
+export function defaultThickness(catId, subtype, fabricText) {
+  if (FORCE_THICK[subtype]) return T_NAME[FORCE_THICK[subtype]];
+  const fi = fabricInfo(fabricText);
+  let n = fi ? fi.thick : (catId === 'outerwear' ? 2 : catId === 'tops' ? 2 : 2);
+  if (MIN_THICK[subtype]) n = Math.max(n, MIN_THICK[subtype]);
+  return T_NAME[n];
+}
+export function thicknessOf(item) {
+  return T_RANK[item?.thickness] || T_RANK[defaultThickness(item?.category, item?.subtype, item?.fabric)] || 2;
+}
+export function isSleeveless(item) {
+  if (item?.sleeves === 'Sleeveless') return true;
+  if (item?.sleeves === 'Sleeved') return false;
+  const sub = item?.subtype || '';
+  if (/(sleeveless|vest|corset|bustier)/i.test(sub)) return true;
+  return /(sleeveless|\btank\b|\bcami\b|camisole|\bvest\b)/i.test(item?.name || '');
+}
+/** 0 = base layer, 1 = mid layer (knits, vests), 2 = jacket-type layer. */
+function layerRank(item) {
+  const s = `${item?.subtype || ''} ${item?.name || ''}`;
+  if (/(blazer|jacket)/i.test(s)) return 2;
+  if (/(turtle|roll)/i.test(s)) return thicknessOf(item) === 1 ? 0 : 1;
+  if (/(tee|tank|blouse|shirt|bodysuit|corset|bustier|cami)/i.test(s)) return 0;
+  return 1;
+}
+
+/**
+ * Can two tops be worn one over the other? Returns { ok, inner, outer, penalty, reason }.
+ * Thick pieces never go under another top, a thin layer cannot go over a thicker one,
+ * and a sleeveless knit works over a thin sleeved base (blouse, tee).
+ */
+export function layerPair(a, b) {
+  let inner = a, outer = b;
+  const ra = layerRank(a), rb = layerRank(b);
+  if (ra !== rb) { if (ra > rb) { inner = b; outer = a; } }
+  else if (isSleeveless(a) !== isSleeveless(b)) { if (isSleeveless(a)) { inner = b; outer = a; } }
+  else if (thicknessOf(a) > thicknessOf(b)) { inner = b; outer = a; }
+  const ti = thicknessOf(inner), to = thicknessOf(outer), jacket = layerRank(outer) === 2;
+  if (ti === 3 && !jacket) return { ok: false, inner, outer, penalty: 0, reason: `${inner.name} is too thick to wear under another top — layering ${outer.name} over it would be bulky. A thin blouse or tee underneath would work.` };
+  if (to < ti && !jacket) return { ok: false, inner, outer, penalty: 0, reason: `${outer.name} is thinner than ${inner.name}, so it will not sit over it. Layer it over a thin base such as a blouse or tee instead.` };
+  let penalty = 0;
+  if (isSleeveless(outer) && ti === 1) penalty += 1.2;          // sleeveless knit over a thin sleeved base: classic
+  if (ti >= 2 && to === ti && !jacket) penalty -= 1.5;          // same medium weight twice: bulky
+  if (outer.silhouette === 'Fitted' && ti >= 2) penalty -= 1.5; // fitted outer over a substantial base
+  return { ok: true, inner, outer, penalty, reason: '' };
+}
+
+/** Soft penalty for a coat/jacket over what is underneath it. */
+function outerLayerPenalty(under, outer) {
+  if (!under.length) return 0;
+  const ti = Math.max(...under.map(thicknessOf)), to = thicknessOf(outer);
+  let p = 0;
+  if (to < ti) p -= 8;                                         // thin trench over a chunky knit: stronger than the "vary the looks" nudge
+  if (ti === 3 && outer.silhouette === 'Fitted') p -= 2;
+  return p;
+}
+
+/* ---------- Auto-suggest a category (no ML: keywords + photo shape) ---------- */
+
+const KEYWORD_RULES = [
+  [/\b(tights|pantyhose|stockings?|socks?)\b/, 'legwear', m => /stocking/.test(m[0]) ? 'Stockings' : /sock/.test(m[0]) ? 'Socks' : 'Tights'],
+  [/\b(ankle boots?|chelsea boots?)\b/, 'shoes', () => 'Ankle boots'], [/\bboots?\b/, 'shoes', () => 'Boots'],
+  [/\bloafers?\b/, 'shoes', () => 'Loafers'], [/\b(heels?|pumps?|stilettos?)\b/, 'shoes', () => 'Heels'],
+  [/\b(flats?|ballet|ballerinas?)\b/, 'shoes', () => 'Flats'], [/\b(sneakers?|trainers?)\b/, 'shoes', () => 'Sneakers'],
+  [/\bsandals?\b/, 'shoes', () => 'Sandals'], [/\bmules?\b/, 'shoes', () => 'Mules'],
+  [/\b(earrings?|studs|hoops)\b/, 'jewelry', () => 'Earrings'], [/\b(necklace|pendant|chain)\b/, 'jewelry', () => 'Necklace'],
+  [/\b(bracelet|watch|bangle|cuff)\b/, 'jewelry', () => 'Bracelet / Watch'], [/\bring\b/, 'jewelry', () => 'Ring'],
+  [/\b(scarf|shawl)\b/, 'jewelry', () => 'Scarf'], [/\b(bag|handbag|tote|purse|clutch)\b/, 'jewelry', () => 'Bag'],
+  [/\bbelt\b/, 'belts', () => ''],
+  [/\b(hair ?clip|claw clip|scrunchie|headband|barrette|hair ribbon|hair tie)\b/, 'hair', () => ''],
+  [/\b(nail polish|nail varnish|nail lacquer)\b/, 'nails', () => ''],
+  [/\b(lipstick|lip gloss|blush|eyeshadow|eye shadow|mascara|foundation|makeup)\b/, 'makeup', m => /lip/.test(m[0]) ? 'Lipstick' : /blush/.test(m[0]) ? 'Blush' : /eye/.test(m[0]) ? 'Eyeshadow' : ''],
+  [/\b(perfume|parfum|eau de|fragrance|cologne)\b/, 'perfume', () => ''],
+  [/\bslip dress\b/, 'dresses', () => 'Slip'], [/\bwrap dress\b/, 'dresses', () => 'Wrap'], [/\bshirt ?dress\b/, 'dresses', () => 'Shirt dress'],
+  [/\b(knit|sweater|jumper) dress\b/, 'dresses', () => 'Knit dress'], [/\bmini dress\b/, 'dresses', () => 'Mini'],
+  [/\bmidi dress\b/, 'dresses', () => 'Midi'], [/\b(maxi dress|gown)\b/, 'dresses', () => 'Maxi'], [/\b(dress|jumpsuit)\b/, 'dresses', () => ''],
+  [/\bleggings?\b/, 'bottoms', () => 'Leggings'], [/\bjeans\b/, 'bottoms', () => 'Jeans'], [/\bskirt\b/, 'bottoms', () => 'Skirt'],
+  [/\bculottes?\b/, 'bottoms', () => 'Culottes'], [/\bcargo\b/, 'bottoms', () => 'Cargo / Utility'], [/\bshorts\b/, 'bottoms', () => 'Shorts'],
+  [/\b(trousers?|pants|slacks|chinos|palazzo)\b/, 'bottoms', () => 'Trousers'],
+  [/\b(puffer|down jacket|padded jacket)\b/, 'outerwear', () => 'Puffer'], [/\btrench\b/, 'outerwear', () => 'Trench'],
+  [/\b(leather jacket|biker jacket)\b/, 'outerwear', () => 'Leather jacket'], [/\b(gilet|body warmer)\b/, 'outerwear', () => 'Gilet'],
+  [/\b(cape|poncho)\b/, 'outerwear', () => 'Cape / Poncho'], [/\b(overcoat|coat|parka|peacoat)\b/, 'outerwear', () => 'Coat'],
+  [/\bblazer\b/, 'tops', () => 'Blazer / Jacket'], [/\bjacket\b/, 'outerwear', () => 'Jacket'],
+  [/\bcardigan\b/, 'tops', () => 'Cardigan'], [/\b(turtle ?neck|roll ?neck|polo neck|mock neck)\b/, 'tops', () => 'Turtleneck'],
+  [/\b(sleeveless (sweater|knit|jumper)|(sweater|knit) vest|waistcoat|vest)\b/, 'tops', () => 'Sleeveless Sweater / Vest'],
+  [/\b(sweater|jumper|pullover|knitwear|knit|sweatshirt|hoodie)\b/, 'tops', () => 'Sweater / Knit'],
+  [/\bbodysuit\b/, 'tops', () => 'Bodysuit'], [/\b(corset|bustier)\b/, 'tops', () => 'Corset / Bustier'],
+  [/\b(blouse|shirt|button[- ]?up|button[- ]?down)\b/, 'tops', () => 'Blouse / Shirt'],
+  [/\b(t-?shirt|tee|tank|camisole|cami|top)\b/, 'tops', () => 'Tee / Tank']
+];
+
+/** Guess category, type, fabric, thickness and sleeves from words the user typed (name / notes). */
+export function suggestFromText(text) {
+  const t = lc(text).replace(/boot[- ]?cut/g, 'bootcut');
+  if (!t.trim()) return null;
+  let hit = null;
+  for (const [re, cat, sub] of KEYWORD_RULES) {
+    const m = t.match(re);
+    if (m) { hit = { category: cat, subtype: sub(m) || '' }; break; }
+  }
+  const fab = fabricInfo(t);
+  const thickness = /(chunky|thick|heavy|bulky|cable[- ]?knit|fleece|puffer)/.test(t) ? 'Thick'
+    : /(thin|fine[- ]?knit|lightweight|light[- ]?weight|sheer|delicate|gauzy)/.test(t) ? 'Light' : '';
+  const sleeves = /(sleeveless|\btank\b|camisole|\bcami\b|\bvest\b)/.test(t) ? 'Sleeveless' : '';
+  if (!hit && !fab && !thickness && !sleeves) return null;
+  return { ...(hit || {}), fabric: fab ? fab.label : '', thickness, sleeves };
+}
+
+/** Very rough guess from the photo's proportions only — shown as a hint, never applied silently. */
+export function suggestFromShape(w, h) {
+  if (!w || !h) return null;
+  const r = w / h;
+  if (r > 1.35) return { category: 'shoes', subtype: '' };
+  if (r < 0.62) return { category: 'dresses', subtype: '' };
+  return null;
 }
 
 /* ---------- Colour helpers ---------- */
@@ -82,7 +246,7 @@ export function contrastFromHex(hex) {
   return 'Dark';
 }
 
-const COLOR_NAMES = [
+export const COLOR_NAMES = [
   ['Ivory', '#F5F0E6'], ['Cream', '#EDE3CF'], ['White', '#FAFAFA'], ['Oatmeal', '#D7C9B1'], ['Beige', '#C9B79C'],
   ['Camel', '#B98B58'], ['Tan', '#A67C52'], ['Sand', '#D9C7A3'], ['Taupe', '#8B7D6F'], ['Chocolate', '#4A3226'],
   ['Brown', '#6B4A33'], ['Espresso', '#2E211B'], ['Black', '#151515'], ['Charcoal', '#3A3B3D'], ['Grey', '#8A8A8A'],
@@ -137,7 +301,7 @@ export function autoName(catId, colorNm, subtype) {
 const MOOD_PROFILES = {
   'Quiet Luxury': {
     feeling: 'composed, expensive-feeling and calm',
-    vibes: ['Old-Money', 'Elevated'], tonal: true,
+    vibes: ['Old-Money', 'Elevated', 'Minimal'], tonal: true,
     hair: ['a low, sleek chignon with a soft centre part', 'smooth, brushed-back hair tucked behind the ears'],
     makeup: 'skin-first: sheer base, soft taupe lids, a barely-there rosy-nude lip',
     nails: 'a sheer milky nude or soft ballet pink, short and rounded',
@@ -146,7 +310,7 @@ const MOOD_PROFILES = {
   },
   'Cozy & Polished': {
     feeling: 'warm, held and effortlessly put-together',
-    vibes: ['Cozy', 'Elevated'], tonal: true,
+    vibes: ['Cozy', 'Elevated', 'Casual', 'Preppy'], tonal: true,
     hair: ['loose, soft waves tucked behind one ear', 'a low ponytail with a few face-framing strands left out'],
     makeup: 'a warm, cream-based glow: peachy blush, brown mascara, a satin balm',
     nails: 'a soft oat or café-au-lait cream, glossy',
@@ -155,7 +319,7 @@ const MOOD_PROFILES = {
   },
   'Effortless Chic': {
     feeling: 'relaxed, a little undone and quietly cool',
-    vibes: ['Effortless Chic', 'Old-Money'], tonal: false,
+    vibes: ['Effortless Chic', 'Old-Money', 'Casual', 'Bohemian', 'Sporty-Luxe'], tonal: false,
     hair: ['a slightly undone low bun with loose pieces', 'a tousled half-up twist'],
     makeup: 'a bare face with a blurred brown-red lip and groomed brows',
     nails: 'bare natural nails with a clear gloss, or a pale greige',
@@ -164,7 +328,7 @@ const MOOD_PROFILES = {
   },
   'Sharp & Confident': {
     feeling: 'precise, powerful and in charge',
-    vibes: ['Elevated', 'Old-Money'], tonal: false,
+    vibes: ['Elevated', 'Old-Money', 'Edgy', 'Evening', 'Preppy'], tonal: false,
     hair: ['a high, polished ponytail pulled tight', 'a sleek, side-parted blowout tucked behind the ear'],
     makeup: 'defined brows, a crisp winged liner and a deep berry or classic red lip',
     nails: 'a deep oxblood, espresso or crisp milky white — short, squared',
@@ -173,7 +337,7 @@ const MOOD_PROFILES = {
   },
   'Soft & Romantic': {
     feeling: 'tender, graceful and quietly romantic',
-    vibes: ['Effortless Chic', 'Cozy'], tonal: true,
+    vibes: ['Effortless Chic', 'Cozy', 'Romantic', 'Bohemian', 'Evening'], tonal: true,
     hair: ['soft waves pinned half-up with a ribbon or clip', 'a loose, low side braid with face-framing pieces'],
     makeup: 'rosy cheeks, dewy skin, soft pink lids and a stained petal lip',
     nails: 'a sheer blush pink or soft rosé, glossy and rounded',
@@ -182,9 +346,16 @@ const MOOD_PROFILES = {
   }
 };
 
-export function interpretMood(text = '', chip = '') {
-  const t = (text + ' ' + chip).toLowerCase();
-  if (chip && MOOD_PROFILES[chip]) return { key: chip, ...MOOD_PROFILES[chip], text: text.trim() };
+/**
+ * Blend any number of moods. `chips` is a name, or an array of names / { name, base } (custom moods
+ * inherit the profile of their `base` built-in mood). Words in `text` can add more moods.
+ */
+export function interpretMood(text = '', chips = []) {
+  const list = Array.isArray(chips) ? chips : [chips];
+  const picks = list.filter(Boolean)
+    .map(c => typeof c === 'string' ? { label: c, base: c } : { label: c.name, base: c.base })
+    .filter(p => MOOD_PROFILES[p.base]);
+  const t = (text || '').toLowerCase();
   const rules = [
     ['Cozy & Polished', /(cosy|cozy|warm|snug|soft knit|comfort)/],
     ['Sharp & Confident', /(sharp|confident|power|bold|strong|boss|meeting|focused)/],
@@ -192,8 +363,23 @@ export function interpretMood(text = '', chip = '') {
     ['Effortless Chic', /(effortless|easy|relaxed|casual|undone|chill|cool)/],
     ['Quiet Luxury', /(quiet|luxur|classic|timeless|elegant|polished|refined|calm)/]
   ];
-  for (const [k, re] of rules) if (re.test(t)) return { key: k, ...MOOD_PROFILES[k], text: text.trim() };
-  return { key: 'Quiet Luxury', ...MOOD_PROFILES['Quiet Luxury'], text: text.trim() };
+  for (const [k, re] of rules) if (re.test(t) && !picks.some(p => p.base === k)) picks.push({ label: k, base: k });
+  if (!picks.length) picks.push({ label: 'Quiet Luxury', base: 'Quiet Luxury' });
+  const use = picks.slice(0, 3);
+  const profs = use.map(p => MOOD_PROFILES[p.base]);
+  const uniq = arr => [...new Set(arr)];
+  return {
+    key: use.map(p => p.label).join(' + '),
+    feeling: profs.length > 1 ? `${profs[0].feeling} — with notes of ${profs.slice(1).map(p => p.feeling).join(' and ')}` : profs[0].feeling,
+    vibes: uniq(profs.flatMap(p => p.vibes)),
+    tonal: profs.some(p => p.tonal),
+    hair: uniq(profs.flatMap(p => p.hair)),
+    makeup: profs[0].makeup,
+    nails: profs[profs.length - 1].nails,
+    jewelry: profs[0].jewelry,
+    texture: uniq(profs.map(p => p.texture)).join(', plus '),
+    text: (text || '').trim()
+  };
 }
 
 /* ---------- Scoring ---------- */
@@ -226,19 +412,34 @@ function vibeScore(item, mood) {
   return item.vibe.filter(v => mood.vibes.includes(v)).length * 0.8;
 }
 
+/** Two shiny fabrics compete; one shiny piece against matte reads richer. */
+function sheenScore(a, b) {
+  const fa = fabricInfo(a?.fabric), fb = fabricInfo(b?.fabric);
+  if (!fa || !fb) return 0;
+  if (fa.sheen === 'shiny' && fb.sheen === 'shiny') return -1.2;
+  if ((fa.sheen === 'shiny' && fb.sheen === 'matte') || (fb.sheen === 'shiny' && fa.sheen === 'matte')) return 0.4;
+  return 0;
+}
+
 function pairScore(a, b, mood, intent) {
-  return contrastScore(a, b, intent) + harmony(a.color?.hex, b.color?.hex) + vibeScore(b, mood);
+  return contrastScore(a, b, intent) + harmony(a.color?.hex, b.color?.hex) + vibeScore(b, mood) + sheenScore(a, b);
 }
 
 /* ---------- Look building ---------- */
 
 const CLOTHING_SLOTS = new Set(['top', 'bottom', 'dress', 'outer', 'shoes']);
 
-function emptyOutfit() { return { top: [], bottom: null, dress: null, outer: null, shoes: null }; }
+function emptyOutfit() { return { top: [], bottom: null, dress: null, outer: null, shoes: null, warnings: [] }; }
 
 function placeCore(outfit, item) {
   const slot = categoryById(item.category)?.slot;
-  if (slot === 'top') { if (outfit.top.length < 2) outfit.top.push(item); }
+  if (slot === 'top') {
+    if (outfit.top.length === 0) outfit.top.push(item);
+    else if (outfit.top.length === 1) {
+      const lp = layerPair(outfit.top[0], item);
+      if (lp.ok) outfit.top.push(item); else outfit.warnings.push(lp.reason);
+    }
+  }
   else if (slot === 'bottom' || slot === 'dress' || slot === 'outer' || slot === 'shoes') { if (!outfit[slot]) outfit[slot] = item; }
 }
 
@@ -312,20 +513,25 @@ function completeOutfit(core, items, mood, intent, avoid) {
 
   // Editorial look gets a layering piece when it already has top + bottom: a second, different top worn as a layer.
   if (intent === 'editorial' && !o.dress && o.top.length === 1 && o.bottom) {
+    // only pieces that can physically be layered with the first top (no thick-on-thick, no thin over thick)
     const layer = pickBest(
-      notCore(pool('top')).filter(t => t.id !== o.top[0].id),
-      t => pairScore(t, o.top[0], mood, 'editorial') + (t.silhouette === 'Relaxed' || t.silhouette === 'Voluminous' ? 0.8 : 0),
+      notCore(pool('top')).filter(t => t.id !== o.top[0].id && (t.subtype || '').match(/Cardigan|Blazer|Sweater|Knit|Vest/i) && layerPair(o.top[0], t).ok),
+      t => pairScore(t, o.top[0], mood, 'editorial') + layerPair(o.top[0], t).penalty + (t.silhouette === 'Relaxed' || t.silhouette === 'Voluminous' ? 0.8 : 0),
       avoid, 0.8
     );
-    if (layer && (layer.subtype || '').match(/Cardigan|Blazer|Sweater|Knit/i)) o.top.push(layer);
+    if (layer) o.top.push(layer);
   }
 
   if (!o.outer && pool('outer').length && base) {
-    o.outer = pickBest(pool('outer'), c => pairScore(c, anchor, mood, intent) + (intent === 'classic' && c.silhouette === 'Relaxed' ? 0.5 : 0), avoid, 0.7);
+    const under = o.dress ? [o.dress] : o.top;
+    o.outer = pickBest(pool('outer'), c => pairScore(c, anchor, mood, intent) + outerLayerPenalty(under, c) + (intent === 'classic' && c.silhouette === 'Relaxed' ? 0.5 : 0), avoid, 0.7);
+    if (o.outer && outerLayerPenalty(under, o.outer) <= -8) o.outer = null;   // would not sit over what is underneath: skip it
   }
   if (!o.shoes && pool('shoes').length && base) {
     o.shoes = pickBest(pool('shoes'), s => harmony(s.color?.hex, anchor.color?.hex) + (intent === 'classic' && s.contrast === 'Dark' ? 1 : 0) + vibeScore(s, mood), avoid, 0.7);
   }
+  // order two tops so the base layer comes first and the outer layer second
+  if (o.top.length === 2) { const lp = layerPair(o.top[0], o.top[1]); o.top = [lp.inner, lp.outer]; }
   return o;
 }
 
@@ -342,7 +548,7 @@ function nm(i) { return i ? i.name : ''; }
 function lc(s) { return (s || '').toLowerCase(); }
 
 function proportionNote(o, intent) {
-  const tops = o.top, top = tops[0], bottom = o.bottom, dress = o.dress;
+  const tops = o.top, top = tops[tops.length - 1], bottom = o.bottom, dress = o.dress;   // the visible top is the outer layer
   const lines = [];
   if (dress) {
     lines.push(dress.silhouette === 'Fitted'
@@ -380,6 +586,23 @@ function contrastNote(o) {
     return `Both pieces sit in the ${a.contrast.toLowerCase()} range, so the outfit reads tonal and seamless — lift it with texture and one contrasting accessory.`;
   }
   return '';
+}
+
+function fabricNote(o) {
+  const fp = outfitPieces(o).map(i => ({ i, f: fabricInfo(i.fabric) })).filter(x => x.f);
+  if (!fp.length) return '';
+  const shiny = fp.filter(x => x.f.sheen === 'shiny'), matte = fp.filter(x => x.f.sheen === 'matte');
+  const lines = [];
+  if (shiny.length >= 2) lines.push(`${shiny.map(x => `${nm(x.i)} (${lc(x.f.label)})`).join(' and ')} both catch the light — let one lead and keep the other quiet, or break them up with something matte.`);
+  else if (shiny.length === 1) {
+    const s = shiny[0];
+    lines.push(`${nm(s.i)} is ${lc(s.f.label)} — ${s.f.note}. ${matte.length ? `Its sheen reads richer against the matte ${[...new Set(matte.slice(0, 2).map(x => lc(x.f.label)))].join(' and ')}.` : 'Keep everything else matte so it stays the focus.'}`);
+  } else if (matte.length >= 2) {
+    lines.push(`Everything here is matte (${[...new Set(matte.map(x => lc(x.f.label)))].join(', ')}), so texture does the work. One touch of sheen — silk, satin or leather — would lift it.`);
+  }
+  const heavy = fp.filter(x => thicknessOf(x.i) === 3);
+  if (heavy.length) lines.push(`${heavy.map(x => nm(x.i)).join(' and ')} ${heavy.length > 1 ? 'are' : 'is'} the thick piece${heavy.length > 1 ? 's' : ''} — keep the rest of the layers thin so the look does not feel heavy.`);
+  return lines.join(' ');
 }
 
 function layerNote(o, mood) {
@@ -440,6 +663,7 @@ function buildLookObject(title, tagline, outfit, finish, mood, intent) {
   const notes = [
     { label: 'Proportion & tuck', text: proportionNote(outfit, intent) },
     { label: 'Colour balance',    text: contrastNote(outfit) },
+    { label: 'Fabric & texture',  text: fabricNote(outfit) },
     { label: 'Layering',          text: layerNote(outfit, mood) },
     { label: 'Legwear',           text: finish.legwear ? `${nm(finish.legwear)} links the shoes to the hem — keep it close to the ${finish.legwear.color?.name ? finish.legwear.color.name.toLowerCase() : 'palette'} of the look.` : '' },
     { label: 'Belt',              text: beltNote(finish, outfit, intent) },
@@ -463,10 +687,10 @@ function buildLookObject(title, tagline, outfit, finish, mood, intent) {
  * Build exactly two looks.
  * items: all closet items. coreIds: >=1 chosen item ids. finish: { belt, jewelry, hair, nails, makeup, perfume } (items or null).
  */
-export function buildLooks({ items, coreIds, moodText = '', moodChip = '', finish = {} }) {
+export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {} }) {
   const core = coreIds.map(id => items.find(i => i.id === id)).filter(Boolean);
   if (!core.length) return { error: 'Pick at least one core piece from your closet, or tap Surprise Me.' };
-  const mood = interpretMood(moodText, moodChip);
+  const mood = interpretMood(moodText, moodChips || moodChip);
   const none = new Set();
 
   const o1 = completeOutfit(core, items, mood, 'classic', none);
@@ -476,7 +700,7 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', finis
 
   const look1 = buildLookObject('The Polished Classic', 'Balanced proportions, a defined waist and light-to-dark contrast.', o1, finish, mood, 'classic');
   const look2 = buildLookObject('The Effortless Editorial', 'A distinct pairing with a cooler, more undone point of view.', o2, finish, mood, 'editorial');
-  return { mood: mood.key, feeling: mood.feeling, looks: [look1, look2] };
+  return { mood: mood.key, feeling: mood.feeling, warnings: o1.warnings, looks: [look1, look2] };
 }
 
 /* ======================================================================

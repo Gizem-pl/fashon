@@ -9,7 +9,8 @@ const LS = {
   items: 'qc.items.v1',
   profile: 'qc.profile.v1',
   looks: 'qc.looks.v1',
-  checks: 'qc.checks.v1'
+  checks: 'qc.checks.v1',
+  moods: 'qc.moods.v1'
 };
 const DB_NAME = 'quiet-closet';
 const DB_VERSION = 1;
@@ -61,6 +62,16 @@ export function saveLook(look) {
 }
 export function removeLook(id) { write(LS.looks, getLooks().filter(l => l.id !== id)); }
 export function isLookSaved(id) { return getLooks().some(l => l.id === id); }
+
+/* ---------- Custom moods: { id, name, base } where base is a built-in mood the custom one inherits from ---------- */
+
+export function getCustomMoods() { return read(LS.moods, []); }
+export function saveCustomMood(m) {
+  const list = getCustomMoods().filter(x => x.name.toLowerCase() !== m.name.toLowerCase());
+  list.push({ id: m.id || newId('m'), name: m.name, base: m.base });
+  return write(LS.moods, list);
+}
+export function removeCustomMood(id) { write(LS.moods, getCustomMoods().filter(m => m.id !== id)); }
 
 /* ---------- Saved link checks ---------- */
 
@@ -165,7 +176,7 @@ export async function processPhoto(file) {
 
   const blob = await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('Compression failed.')), 'image/jpeg', 0.8));
   const color = dominantColor(ctx, w, h);
-  return { blob, color: { hex: color.hex, name: colorName(color.hex) }, contrast: contrastFromHex(color.hex) };
+  return { blob, color: { hex: color.hex, name: colorName(color.hex) }, contrast: contrastFromHex(color.hex), width: sw, height: sh };
 }
 
 /** Dominant colour via 4-bit quantised histogram over the centre of the image, ignoring blank backdrops. */
@@ -249,7 +260,7 @@ export async function createBackup() {
   for (const it of items) {
     try { const b = await getPhoto(it.id); if (b) photos[it.id] = await blobToDataURL(b); } catch (e) { console.warn('photo skipped', it.id, e); }
   }
-  const data = { app: 'quiet-closet', version: BACKUP_VERSION, exportedAt: new Date().toISOString(), items, profile: read(LS.profile, {}), looks: getLooks(), checks: getChecks(), photos };
+  const data = { app: 'quiet-closet', version: BACKUP_VERSION, exportedAt: new Date().toISOString(), items, profile: read(LS.profile, {}), looks: getLooks(), checks: getChecks(), moods: getCustomMoods(), photos };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   return { blob, filename: `quiet-closet-backup-${new Date().toISOString().slice(0, 10)}.json`, count: items.length };
 }
@@ -257,8 +268,8 @@ export async function createBackup() {
 /** Plain-text/CSV list of the closet (no photos) for reading in Numbers/Excel. */
 export function createCSV() {
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const head = ['Name', 'Category', 'Type', 'Colour', 'Hex', 'Contrast', 'Silhouette', 'Vibe', 'Scent mood', 'Fabric', 'Notes'];
-  const rows = getItems().map(i => [i.name, i.category, i.subtype, i.color?.name, i.color?.hex, i.contrast, i.silhouette, (i.vibe || []).join('; '), i.scentMood, i.fabric, i.notes].map(q).join(','));
+  const head = ['Name', 'Category', 'Type', 'Colour', 'Hex', 'Contrast', 'Silhouette', 'Thickness', 'Sleeves', 'Vibe', 'Scent mood', 'Fabric', 'Composition', 'Notes'];
+  const rows = getItems().map(i => [i.name, i.category, i.subtype, i.color?.name, i.color?.hex, i.contrast, i.silhouette, i.thickness, i.sleeves, (i.vibe || []).join('; '), i.scentMood, i.fabric, i.fabricMix, i.notes].map(q).join(','));
   return { blob: new Blob([[head.map(q).join(','), ...rows].join('\n')], { type: 'text/csv' }), filename: 'quiet-closet-items.csv' };
 }
 
@@ -284,7 +295,7 @@ export async function restoreBackup(file, mode = 'merge') {
     const cur = read(key, []); const ids = new Set(cur.map(x => x.id));
     write(key, [...cur, ...(incoming || []).filter(x => !ids.has(x.id))]);
   };
-  mergeList(LS.looks, data.looks); mergeList(LS.checks, data.checks);
+  mergeList(LS.looks, data.looks); mergeList(LS.checks, data.checks); mergeList(LS.moods, data.moods);
   if (data.profile && Object.keys(data.profile).length && (mode === 'replace' || !Object.keys(read(LS.profile, {})).length)) write(LS.profile, data.profile);
   await preloadPhotos(data.items.map(i => i.id));
   return { items: data.items.length, photos: photosRestored };

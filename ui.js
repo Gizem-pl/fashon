@@ -32,7 +32,7 @@ const state = {
   tab: 'studio',
   items: [],
   closetFilter: 'all',
-  studio: { core: new Set(), pickFilter: 'all', moodText: '', moodChip: '', finish: {}, result: null, openFinish: false },
+  studio: { core: new Set(), pickFilter: 'all', moodText: '', moodChips: [], finish: {}, result: null, openFinish: false },
   checker: { url: '', name: '', text: '', type: 'auto', fit: 'auto', kind: 'auto', color: null, report: null, activeId: null },
   draft: null
 };
@@ -119,8 +119,14 @@ function renderStudio() {
       <label class="field"><span>How do you want to feel today?</span>
         <input id="mood-text" type="text" inputmode="text" autocomplete="off" placeholder="e.g. calm, warm, quietly confident" value="${esc(s.moodText)}">
       </label>
-      <div class="chips" id="mood-chips">
-        ${E.MOODS.map(m => `<button class="chip ${s.moodChip === m ? 'on' : ''}" data-act="mood-chip" data-mood="${esc(m)}">${esc(m)}</button>`).join('')}
+      <p class="hint">Tap one or more moods — I will blend them (up to 3).</p>
+      <div class="chips" id="mood-chips">${moodChipsHTML()}</div>
+      <div class="add-mood">
+        <input id="new-mood" type="text" autocomplete="off" maxlength="24" placeholder="Add your own mood, e.g. Gallery opening">
+        <select id="new-mood-base" aria-label="Feels most like">
+          ${E.MOODS.map(m => `<option value="${esc(m)}">Feels like ${esc(m)}</option>`).join('')}
+        </select>
+        <button class="btn ghost small" data-act="add-mood">Add</button>
       </div>
     </section>
 
@@ -148,6 +154,19 @@ function renderStudio() {
   renderPicker();
   renderResults();
   renderSavedLooks();
+}
+
+function moodChipsHTML() {
+  const on = new Set(state.studio.moodChips);
+  const builtin = E.MOODS.map(m => `<button class="chip ${on.has(m) ? 'on' : ''}" data-act="mood-chip" data-mood="${esc(m)}" aria-pressed="${on.has(m)}">${esc(m)}</button>`);
+  const custom = S.getCustomMoods().map(m => `<span class="chipset"><button class="chip ${on.has(m.name) ? 'on' : ''}" data-act="mood-chip" data-mood="${esc(m.name)}" aria-pressed="${on.has(m.name)}">${esc(m.name)}</button><button class="chipx" data-act="del-mood" data-id="${m.id}" aria-label="Remove ${esc(m.name)}">×</button></span>`);
+  return [...builtin, ...custom].join('');
+}
+
+/** Selected mood names → what the engine needs (custom moods carry the built-in mood they inherit from). */
+function moodPicks() {
+  const custom = S.getCustomMoods();
+  return state.studio.moodChips.map(n => custom.find(m => m.name === n) || n);
 }
 
 function renderPicker() {
@@ -194,6 +213,7 @@ function renderResults() {
   if (r.error) { box.innerHTML = `<p class="note warn">${esc(r.error)}</p>`; return; }
   box.innerHTML = `
     <div class="result-head"><p class="eyebrow">Today · ${esc(r.mood)}</p><p class="sub">Feeling ${esc(r.feeling)}.</p></div>
+    ${(r.warnings || []).map(w => `<p class="note warn">${esc(w)}</p>`).join('')}
     ${r.looks.map((l, i) => lookCard(l, i, S.isLookSaved(l.id))).join('')}
     <button class="btn ghost wide" data-act="generate">↻ Restyle</button>`;
 }
@@ -222,7 +242,7 @@ function staleResult() {
 
 function startOver() {
   const s = state.studio;
-  s.core.clear(); s.moodText = ''; s.moodChip = ''; s.finish = {}; s.result = null; s.openFinish = false; s.pickFilter = 'all';
+  s.core.clear(); s.moodText = ''; s.moodChips = []; s.finish = {}; s.result = null; s.openFinish = false; s.pickFilter = 'all';
   renderStudio();
   window.scrollTo({ top: 0, behavior: 'smooth' });
   toast('Cleared — start fresh');
@@ -240,7 +260,7 @@ function generate(surprise = false) {
   if (!s.core.size) { toast('Pick a core piece, or tap Surprise Me.'); return; }
   const finish = {};
   FINISH_CATS.forEach(f => { finish[f.key] = s.finish[f.key] ? itemById(s.finish[f.key]) || null : null; });
-  s.result = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChip: s.moodChip, finish });
+  s.result = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChips: moodPicks(), finish });
   renderResults();
   $('#studio-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -267,8 +287,30 @@ function wireStudio() {
       case 'surprise': generate(true); break;
       case 'generate': generate(false); break;
       case 'mood-chip': {
-        s.moodChip = s.moodChip === b.dataset.mood ? '' : b.dataset.mood;
-        $$('#mood-chips .chip').forEach(c => c.classList.toggle('on', c.dataset.mood === s.moodChip));
+        const m = b.dataset.mood;
+        if (s.moodChips.includes(m)) s.moodChips = s.moodChips.filter(x => x !== m);
+        else if (s.moodChips.length >= 3) { toast('Pick up to 3 moods to blend.'); break; }
+        else s.moodChips = [...s.moodChips, m];
+        $('#mood-chips').innerHTML = moodChipsHTML();
+        staleResult();
+        break;
+      }
+      case 'add-mood': {
+        const input = $('#new-mood'), name = (input.value || '').trim();
+        if (!name) { toast('Type a name for your mood first.'); break; }
+        if (E.MOODS.some(m => m.toLowerCase() === name.toLowerCase())) { toast('That mood already exists.'); break; }
+        if (!S.saveCustomMood({ name, base: $('#new-mood-base').value })) { toast('Could not save — storage may be full.'); break; }
+        if (s.moodChips.length < 3 && !s.moodChips.includes(name)) s.moodChips = [...s.moodChips, name];
+        input.value = '';
+        $('#mood-chips').innerHTML = moodChipsHTML();
+        staleResult(); toast(`Added “${name}”`);
+        break;
+      }
+      case 'del-mood': {
+        const m = S.getCustomMoods().find(x => x.id === b.dataset.id);
+        S.removeCustomMood(b.dataset.id);
+        if (m) s.moodChips = s.moodChips.filter(x => x !== m.name);
+        $('#mood-chips').innerHTML = moodChipsHTML();
         staleResult();
         break;
       }
@@ -288,7 +330,6 @@ function wireStudio() {
     if (e.target.id === 'mood-text') {
       state.studio.moodText = e.target.value;
       staleResult();
-      if (e.target.value && state.studio.moodChip) { /* free text refines, chip stays */ }
     }
   });
   v.addEventListener('change', e => {
@@ -329,6 +370,7 @@ function renderCloset() {
               <span class="dot" style="background:${esc(i.color?.hex)}" title="${esc(i.color?.name)}"></span>
               <span>${esc(i.contrast)}</span>
               ${i.silhouette ? `<span>${esc(i.silhouette)}</span>` : ''}
+              ${i.thickness ? `<span>${esc(i.thickness)}</span>` : ''}
               ${i.scentMood ? `<span>${esc(i.scentMood)}</span>` : ''}
             </div>
           </div>
@@ -351,19 +393,50 @@ function wireCloset() {
   });
 }
 
-/* ---------- Item sheet (add / edit) ---------- */
+/* ---------- Item sheet (add / edit) ----------
+   The sheet is rendered ONCE. Every interaction afterwards updates only the section it affects, so nothing
+   flickers, scroll and keyboard focus are preserved, and the slide-in animation plays only when it opens. */
+
+const THICK_CATS = ['tops', 'bottoms', 'dresses', 'outerwear'];
+const usesThick = c => THICK_CATS.includes(c);
+const needsFabric = c => CLOTHING_CATS.includes(c);
+
+function autoSleeves(d) {
+  if (d.category !== 'tops' || d.sleevesTouched) return;
+  d.sleeves = /(sleeveless|vest|corset|bustier)/i.test(d.subtype || '') ? 'Sleeveless' : 'Sleeved';
+}
+function autoThickness(d) {
+  if (!usesThick(d.category) || d.thickTouched) return;
+  d.thickness = E.defaultThickness(d.category, d.subtype, d.fabric);
+}
 
 function openItemSheet(id) {
   const existing = id ? itemById(id) : null;
   const cat = existing?.category || (state.closetFilter !== 'all' ? state.closetFilter : 'tops');
   const defaults = E.defaultTags(cat);
-  state.draft = existing
-    ? { ...structuredClone(existing), isNew: false, blob: null, previewUrl: S.photoURLSync(existing.id), nameTouched: true, contrastTouched: true }
-    : {
-        id: S.newId('i'), isNew: true, category: cat, name: '', subtype: '', color: { hex: '#C9B79C', name: 'Beige' }, contrast: 'Medium',
-        silhouette: defaults.silhouette, vibe: [...defaults.vibe], scentMood: defaults.scentMood, fabric: '', notes: '',
-        blob: null, previewUrl: '', nameTouched: false, contrastTouched: false, hasColor: false
-      };
+  if (existing) {
+    const fi = E.fabricInfo(existing.fabric);
+    const d = {
+      ...structuredClone(existing), isNew: false, blob: null, previewUrl: S.photoURLSync(existing.id),
+      nameTouched: true, contrastTouched: true, categoryTouched: true, subtypeTouched: true, fabricTouched: true, hasColor: true,
+      fabric: fi ? fi.label : '',
+      // keep whatever was typed before as the composition, so nothing is lost
+      fabricMix: existing.fabricMix || (fi && (existing.fabric || '').toLowerCase() !== fi.label.toLowerCase() ? existing.fabric : ''),
+      thickTouched: !!existing.thickness, sleevesTouched: !!existing.sleeves,
+      thickness: existing.thickness || (usesThick(existing.category) ? E.defaultThickness(existing.category, existing.subtype, existing.fabric) : ''),
+      sleeves: existing.sleeves || (existing.category === 'tops' ? (E.isSleeveless(existing) ? 'Sleeveless' : 'Sleeved') : ''),
+      autoMsg: '', shapeSuggest: null, fabricError: false
+    };
+    state.draft = d;
+  } else {
+    state.draft = {
+      id: S.newId('i'), isNew: true, category: cat, name: '', subtype: '', color: { hex: '#C9B79C', name: 'Beige' }, contrast: 'Medium',
+      silhouette: defaults.silhouette, vibe: [...defaults.vibe], scentMood: defaults.scentMood, fabric: '', fabricMix: '', thickness: '', sleeves: '', notes: '',
+      blob: null, previewUrl: '', nameTouched: false, contrastTouched: false, categoryTouched: false, subtypeTouched: false, fabricTouched: false,
+      thickTouched: false, sleevesTouched: false, hasColor: false, autoMsg: '', shapeSuggest: null, fabricError: false
+    };
+    autoSleeves(state.draft); autoThickness(state.draft);
+  }
   renderSheet();
 }
 
@@ -378,20 +451,88 @@ function closeSheet() {
 function chipRow(name, options, value, multi) {
   return `<div class="chips">${options.map(o => {
     const on = multi ? value.includes(o) : value === o;
-    return `<button type="button" class="chip ${on ? 'on' : ''}" data-chip="${name}" data-v="${esc(o)}">${esc(o)}</button>`;
+    return `<button type="button" class="chip ${on ? 'on' : ''}" data-chip="${name}" data-v="${esc(o)}" aria-pressed="${on}">${esc(o)}</button>`;
   }).join('')}</div>`;
+}
+
+const SECTIONS = {
+  photo: d => `
+    <label class="upload ${d.previewUrl ? 'has' : ''}">
+      ${d.previewUrl ? `<img src="${d.previewUrl}" alt="Preview">` : `<span class="plus">+</span><span>Take or choose a photo</span>`}
+      <input type="file" accept="image/*" id="photo-input" hidden>
+      ${d.previewUrl ? `<span class="change">Change photo</span>` : ''}
+    </label>
+    <p class="hint center" id="photo-status">${d.previewUrl ? '' : 'Colour and contrast are read from the photo automatically.'}</p>`,
+
+  suggest: d => {
+    const out = [];
+    if (d.autoMsg) out.push(`<p class="suggest ok">✦ ${esc(d.autoMsg)}</p>`);
+    else if (d.shapeSuggest && !d.categoryTouched) {
+      const s = d.shapeSuggest;
+      out.push(`<p class="suggest">Rough guess from the photo’s shape: <strong>${esc(catLabel(s.category))}</strong>
+        <button type="button" class="link strong" data-sheet="apply-shape">Use this</button></p>`);
+    }
+    if (d.isNew && !d.name.trim() && !d.categoryTouched && !d.autoMsg)
+      out.push(`<p class="hint">Tip: type a name like “black wool turtleneck” and I will pick the category, type, fabric and thickness for you.</p>`);
+    return out.join('');
+  },
+
+  type: d => {
+    const cat = E.categoryById(d.category);
+    return cat.subtypes.length ? `<span>Type</span>${chipRow('subtype', cat.subtypes, d.subtype, false)}` : '';
+  },
+
+  color: d => `
+    <span>Colour</span>
+    <div class="swatches">${E.COLOR_NAMES.map(([n, h]) =>
+      `<button type="button" class="sw ${h.toUpperCase() === d.color.hex.toUpperCase() ? 'on' : ''}" data-swatch="${h}" data-name="${esc(n)}" style="background:${h}" aria-label="${esc(n)}" title="${esc(n)}"></button>`).join('')}</div>
+    <div class="color-row">
+      <input type="color" id="f-color" value="${esc(d.color.hex.toLowerCase())}" aria-label="Fine-tune colour">
+      <input id="f-colorname" type="text" value="${esc(d.color.name)}" aria-label="Colour name">
+    </div>`,
+
+  contrast: d => `<span>Contrast level <small>auto-tagged</small></span>${chipRow('contrast', E.CONTRASTS, d.contrast, false)}`,
+
+  sil: d => E.usesSilhouette(d.category) ? `<span>Silhouette</span>${chipRow('silhouette', E.SILHOUETTES, d.silhouette, false)}` : '',
+
+  sleeves: d => d.category === 'tops' ? `<span>Sleeves <small>a sleeveless knit only layers over a thin sleeved top</small></span>${chipRow('sleeves', E.SLEEVES, d.sleeves, false)}` : '',
+
+  fabric: d => {
+    if (!needsFabric(d.category)) return '';
+    const fi = E.fabricInfo(d.fabric);
+    return `<span>Fabric <small class="${d.fabricError ? 'err' : ''}">${d.fabricError ? 'required — choose one' : 'required'}</small></span>
+      ${chipRow('fabric', E.FABRICS.map(f => f.label), d.fabric, false)}
+      ${fi ? `<p class="hint fab-info"><strong>${esc(fi.label)}</strong> — ${esc(fi.note)}. Sheen: ${esc(fi.sheen)} · drape: ${esc(fi.drape)} · warmth: ${esc(fi.warmth)}.</p>` : ''}`;
+  },
+
+  thick: d => {
+    if (!usesThick(d.category)) return '';
+    const fi = E.fabricInfo(d.fabric);
+    return `<span>Thickness <small>${d.thickTouched ? 'set by you' : `auto-set${fi ? ` from ${esc(fi.label.toLowerCase())}` : ''} — tap to change`}</small></span>
+      ${chipRow('thickness', E.THICKNESS, d.thickness, false)}
+      <p class="hint">Light = tee, silk blouse · Medium = fine knit, jeans · Thick = chunky knit, coat. Two thick pieces are never layered together.</p>`;
+  },
+
+  vibe: d => d.category === 'perfume'
+    ? `<span>Scent mood</span>${chipRow('scentMood', E.SCENT_MOODS, d.scentMood, false)}`
+    : `<span>Vibe <small>pick any</small></span>${chipRow('vibe', E.VIBES, d.vibe, true)}`
+};
+
+function refresh(...keys) {
+  const d = state.draft; if (!d) return;
+  keys.forEach(k => { const el = $('#sec-' + k); if (el) el.innerHTML = SECTIONS[k](d); });
+}
+
+function updateNamePlaceholder() {
+  const d = state.draft, el = $('#f-name'); if (!d || !el) return;
+  el.placeholder = E.autoName(d.category, d.hasColor || !d.isNew ? d.color.name : '', d.subtype);
 }
 
 function renderSheet() {
   const d = state.draft; if (!d) return;
-  const cat = E.categoryById(d.category);
-  const isPerfume = d.category === 'perfume';
-  const showSil = E.usesSilhouette(d.category);
-  const showFabric = CLOTHING_CATS.includes(d.category);
-  const suggestedName = E.autoName(d.category, d.hasColor || !d.isNew ? d.color.name : '', d.subtype);
   const root = $('#sheet-root');
-  const scrollTop = $('.sheet-body', root)?.scrollTop || 0;
   document.body.classList.add('locked');
+  const sec = (k, cls = 'field') => `<div class="${cls}" id="sec-${k}">${SECTIONS[k](d)}</div>`;
   root.innerHTML = `
   <div class="backdrop" data-sheet="close"></div>
   <div class="sheet" role="dialog" aria-modal="true" aria-label="${d.isNew ? 'Add piece' : 'Edit piece'}">
@@ -401,45 +542,83 @@ function renderSheet() {
       <button class="link strong" data-sheet="save">Save</button>
     </header>
     <div class="sheet-body">
-      <label class="upload ${d.previewUrl ? 'has' : ''}">
-        ${d.previewUrl ? `<img src="${d.previewUrl}" alt="Preview">` : `<span class="plus">+</span><span>Take or choose a photo</span>`}
-        <input type="file" accept="image/*" id="photo-input" hidden>
-        ${d.previewUrl ? `<span class="change">Change photo</span>` : ''}
-      </label>
-      <p class="hint center" id="photo-status">${d.previewUrl ? '' : 'Colour and contrast are read from the photo automatically.'}</p>
-
+      ${sec('photo', 'plain')}
+      ${sec('suggest', 'plain')}
       <label class="field"><span>Category</span>
         <select id="f-category">${E.CATEGORIES.map(c => `<option value="${c.id}" ${c.id === d.category ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select>
       </label>
-
-      ${cat.subtypes.length ? `<div class="field"><span>Type</span>${chipRow('subtype', cat.subtypes, d.subtype, false)}</div>` : ''}
-
+      ${sec('type')}
       <label class="field"><span>Name</span>
-        <input id="f-name" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="${esc(suggestedName)}">
+        <input id="f-name" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="">
       </label>
-
-      <div class="field"><span>Dominant colour</span>
-        <div class="color-row">
-          <input type="color" id="f-color" value="${esc(d.color.hex)}" aria-label="Pick colour">
-          <input id="f-colorname" type="text" value="${esc(d.color.name)}" aria-label="Colour name">
-        </div>
-      </div>
-
-      <div class="field"><span>Contrast level <small>auto-tagged</small></span>
-        ${chipRow('contrast', E.CONTRASTS, d.contrast, false)}
-      </div>
-
-      ${showSil ? `<div class="field"><span>Silhouette</span>${chipRow('silhouette', E.SILHOUETTES, d.silhouette, false)}</div>` : ''}
-      ${isPerfume
-        ? `<div class="field"><span>Scent mood</span>${chipRow('scentMood', E.SCENT_MOODS, d.scentMood, false)}</div>`
-        : `<div class="field"><span>Vibe</span>${chipRow('vibe', E.VIBES, d.vibe, true)}</div>`}
-      ${showFabric ? `<label class="field"><span>Fabric <small>optional</small></span><input id="f-fabric" type="text" value="${esc(d.fabric)}" placeholder="e.g. Merino wool, silk, cotton poplin"></label>` : ''}
+      ${sec('color')}
+      ${sec('contrast')}
+      ${sec('sil')}
+      ${sec('sleeves')}
+      ${sec('fabric')}
+      <label class="field" id="mixfield"><span>Composition <small>optional</small></span>
+        <input id="f-fabricmix" type="text" autocomplete="off" value="${esc(d.fabricMix)}" placeholder="e.g. 80% wool, 20% polyamide"></label>
+      ${sec('thick')}
+      ${sec('vibe')}
       <label class="field"><span>Notes <small>optional</small></span><textarea id="f-notes" rows="2" placeholder="Anything to remember">${esc(d.notes)}</textarea></label>
-
       ${d.isNew ? '' : `<button class="btn danger wide" data-sheet="delete">Delete this piece</button>`}
     </div>
   </div>`;
-  const body = $('.sheet-body', root); if (body) body.scrollTop = scrollTop;
+  updateNamePlaceholder();
+}
+
+/** Switch category and reset the dependent fields to that category's smart defaults. */
+function setCategory(cat, manual) {
+  const d = state.draft; if (!d) return;
+  d.category = cat;
+  const t = E.defaultTags(cat);
+  d.subtype = ''; d.subtypeTouched = false;
+  d.silhouette = t.silhouette; d.vibe = [...t.vibe]; d.scentMood = t.scentMood;
+  d.sleevesTouched = false; d.thickTouched = false;
+  if (manual) d.categoryTouched = true;
+  autoSleeves(d); autoThickness(d);
+  const sel = $('#f-category'); if (sel) sel.value = cat;
+  refresh('type', 'sil', 'sleeves', 'fabric', 'thick', 'vibe', 'suggest');
+  updateNamePlaceholder();
+}
+
+function setColor(hex, name, fromNative) {
+  const d = state.draft; if (!d) return;
+  d.color = { hex: hex.toUpperCase(), name }; d.hasColor = true;
+  if (!d.contrastTouched) {
+    const c = E.contrastFromHex(hex);
+    if (c !== d.contrast) { d.contrast = c; refresh('contrast'); }
+  }
+  if (!fromNative) { const p = $('#f-color'); if (p) p.value = hex.toLowerCase(); }
+  const n = $('#f-colorname'); if (n && document.activeElement !== n) n.value = name;
+  $$('#sec-color .sw').forEach(b => b.classList.toggle('on', b.dataset.swatch.toUpperCase() === hex.toUpperCase()));
+  updateNamePlaceholder();
+}
+
+/** Read the typed name and pre-fill category, type, fabric, thickness and sleeves — only fields the user has not set themselves. */
+function autoFromName() {
+  const d = state.draft; if (!d) return;
+  const sig = () => [d.category, d.subtype, d.fabric, d.thickness, d.sleeves, d.autoMsg].join('|');
+  const before = sig();
+  const sug = E.suggestFromText(d.name);
+  if (!sug) { if (d.autoMsg) { d.autoMsg = ''; refresh('suggest'); } return; }
+  const cat0 = d.category;
+  if (sug.category && !d.categoryTouched) {
+    if (sug.category !== d.category) setCategory(sug.category, false);
+    const c = E.categoryById(d.category);
+    if (sug.subtype && !d.subtypeTouched && c.subtypes.includes(sug.subtype)) d.subtype = sug.subtype;
+    d.autoMsg = `Picked ${catLabel(d.category)}${d.subtype ? ' → ' + d.subtype : ''} from the name. Change it below if that is wrong.`;
+  }
+  if (sug.fabric && !d.fabricTouched && needsFabric(d.category)) d.fabric = sug.fabric;
+  autoSleeves(d);
+  if (sug.sleeves && !d.sleevesTouched && d.category === 'tops') d.sleeves = 'Sleeveless';
+  autoThickness(d);
+  if (sug.thickness && !d.thickTouched && usesThick(d.category)) d.thickness = sug.thickness;
+  if (sig() !== before) {
+    refresh('type', 'sleeves', 'fabric', 'thick', 'suggest');
+    updateNamePlaceholder();
+    if (cat0 !== d.category) $('#f-category').value = d.category;
+  }
 }
 
 async function handlePhoto(file) {
@@ -447,13 +626,16 @@ async function handlePhoto(file) {
   const status = $('#photo-status');
   if (status) status.textContent = 'Reading colours…';
   try {
-    const { blob, color, contrast } = await S.processPhoto(file);
+    const { blob, color, contrast, width, height } = await S.processPhoto(file);
+    if (state.draft !== d) return;
     if (d.previewUrl && d.isNew) URL.revokeObjectURL(d.previewUrl);
     d.blob = blob; d.previewUrl = URL.createObjectURL(blob);
     d.color = color; d.hasColor = true;
     d.contrast = contrast; d.contrastTouched = false;
     if (!d.nameTouched) d.name = '';
-    renderSheet();
+    d.shapeSuggest = d.isNew ? E.suggestFromShape(width, height) : null;
+    refresh('photo', 'color', 'contrast', 'suggest');
+    updateNamePlaceholder();
     const st = $('#photo-status');
     if (st) st.textContent = `Detected ${color.name.toLowerCase()} · ${contrast.toLowerCase()} contrast`;
   } catch (err) {
@@ -464,6 +646,12 @@ async function handlePhoto(file) {
 async function saveDraft() {
   const d = state.draft; if (!d) return;
   if (d.isNew && !d.blob) { toast('Add a photo first.'); return; }
+  if (needsFabric(d.category) && !d.fabric) {
+    d.fabricError = true; refresh('fabric');
+    $('#sec-fabric')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    toast('Choose a fabric — it is required.');
+    return;
+  }
   const name = (d.name || '').trim() || E.autoName(d.category, d.color.name, d.subtype);
   const item = {
     id: d.id, category: d.category, name, subtype: d.subtype || '',
@@ -471,7 +659,10 @@ async function saveDraft() {
     silhouette: E.usesSilhouette(d.category) ? d.silhouette : '',
     vibe: d.category === 'perfume' ? [] : d.vibe,
     scentMood: d.category === 'perfume' ? d.scentMood : '',
-    fabric: (d.fabric || '').trim(), notes: (d.notes || '').trim(),
+    fabric: needsFabric(d.category) ? d.fabric : '', fabricMix: needsFabric(d.category) ? (d.fabricMix || '').trim() : '',
+    thickness: usesThick(d.category) ? d.thickness : '',
+    sleeves: d.category === 'tops' ? d.sleeves : '',
+    notes: (d.notes || '').trim(),
     createdAt: d.createdAt || Date.now(), updatedAt: Date.now()
   };
   try {
@@ -513,41 +704,52 @@ function wireSheet() {
       if (a === 'close') closeSheet();
       if (a === 'save') saveDraft();
       if (a === 'delete') deleteDraft();
+      if (a === 'apply-shape' && d.shapeSuggest) {
+        const s = d.shapeSuggest; d.shapeSuggest = null;
+        setCategory(s.category, true);
+        d.autoMsg = `Set to ${catLabel(s.category)}. Pick the type below.`; refresh('suggest');
+      }
       return;
     }
+    const sw = e.target.closest('[data-swatch]');
+    if (sw) { setColor(sw.dataset.swatch, sw.dataset.name, false); return; }
     const chip = e.target.closest('[data-chip]');
-    if (chip) {
-      const k = chip.dataset.chip, v = chip.dataset.v;
-      if (k === 'vibe') d.vibe = d.vibe.includes(v) ? d.vibe.filter(x => x !== v) : [...d.vibe, v];
-      else if (k === 'contrast') { d.contrast = v; d.contrastTouched = true; }
-      else if (k === 'subtype') { d.subtype = d.subtype === v ? '' : v; }
-      else d[k] = d[k] === v && k !== 'contrast' ? '' : v;
-      renderSheet();
+    if (!chip) return;
+    const k = chip.dataset.chip, v = chip.dataset.v;
+    if (k === 'vibe') { d.vibe = d.vibe.includes(v) ? d.vibe.filter(x => x !== v) : [...d.vibe, v]; refresh('vibe'); }
+    else if (k === 'contrast') { d.contrast = v; d.contrastTouched = true; refresh('contrast'); }
+    else if (k === 'subtype') {
+      d.subtype = d.subtype === v ? '' : v; d.subtypeTouched = true;
+      autoSleeves(d); autoThickness(d); updateNamePlaceholder();
+      refresh('type', 'sleeves', 'thick');
     }
+    else if (k === 'fabric') {
+      d.fabric = d.fabric === v ? '' : v; d.fabricTouched = true; d.fabricError = false;
+      autoThickness(d); refresh('fabric', 'thick');
+    }
+    else if (k === 'thickness') { d.thickness = v; d.thickTouched = true; refresh('thick'); }
+    else if (k === 'sleeves') { d.sleeves = v; d.sleevesTouched = true; refresh('sleeves'); }
+    else if (k === 'silhouette') { d.silhouette = d.silhouette === v ? '' : v; refresh('sil'); }
+    else if (k === 'scentMood') { d.scentMood = d.scentMood === v ? '' : v; refresh('vibe'); }
   });
   root.addEventListener('input', e => {
     const d = state.draft; if (!d) return;
-    if (e.target.id === 'f-name') { d.name = e.target.value; d.nameTouched = true; }
+    if (e.target.id === 'f-name') { d.name = e.target.value; d.nameTouched = true; autoFromName(); }
     if (e.target.id === 'f-colorname') d.color = { ...d.color, name: e.target.value };
-    if (e.target.id === 'f-fabric') d.fabric = e.target.value;
+    if (e.target.id === 'f-fabricmix') {
+      d.fabricMix = e.target.value;
+      const fi = E.fabricInfo(d.fabricMix);
+      if (fi && !d.fabric && !d.fabricTouched && needsFabric(d.category)) { d.fabric = fi.label; autoThickness(d); refresh('fabric', 'thick'); }
+    }
     if (e.target.id === 'f-notes') d.notes = e.target.value;
+    // live colour while dragging in the native picker: update state only, never rebuild the DOM
+    if (e.target.id === 'f-color') setColor(e.target.value, E.colorName(e.target.value), true);
   });
   root.addEventListener('change', e => {
     const d = state.draft; if (!d) return;
     if (e.target.id === 'photo-input') handlePhoto(e.target.files?.[0]);
-    if (e.target.id === 'f-color') {
-      d.color = { hex: e.target.value.toUpperCase(), name: E.colorName(e.target.value) };
-      d.hasColor = true;
-      if (!d.contrastTouched) d.contrast = E.contrastFromHex(e.target.value);
-      renderSheet();
-    }
-    if (e.target.id === 'f-category') {
-      d.category = e.target.value;
-      const t = E.defaultTags(d.category);
-      d.subtype = '';
-      d.silhouette = t.silhouette; d.vibe = [...t.vibe]; d.scentMood = t.scentMood;   // smart defaults for the new category
-      renderSheet();
-    }
+    if (e.target.id === 'f-color') setColor(e.target.value, E.colorName(e.target.value), true);
+    if (e.target.id === 'f-category') { d.autoMsg = ''; setCategory(e.target.value, true); }
   });
 }
 
