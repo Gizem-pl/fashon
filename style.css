@@ -119,6 +119,11 @@ input[type=color] { width: 54px; height: 46px; padding: 3px; border: 1px solid v
 .sw { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--line); padding: 0; flex: none; }
 .sw.on { border-color: var(--gold); box-shadow: 0 0 0 2px var(--bg, #131316), 0 0 0 4px var(--gold); }
 .field:empty { display: none; margin: 0; }
+.name-field > span small { color: var(--gold); }
+.eyedrop { margin: 0 0 10px; }
+.eyedrop.on { background: var(--gold); color: var(--on-gold); border-color: var(--gold); }
+.upload.picking { cursor: crosshair; border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }
+.upload.picking .change { display: none; }
 .suggest { font-size: 14px; margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--gold-soft); line-height: 1.4; }
 .suggest.ok { color: var(--gold); }
 .field > span small.err { color: #e07a7a; font-weight: 600; }
@@ -165,9 +170,12 @@ details.sub-fold > summary { font-size: 13px; color: var(--sub); padding: 6px 0;
 details.sub-fold[open] > summary { margin-bottom: 8px; }
 
 /* ---------- Core picker ---------- */
-.pick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-height: 340px; overflow-y: auto; margin: 4px -2px 8px; padding: 2px; -webkit-overflow-scrolling: touch; }
-.pick { position: relative; aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; border: 1.5px solid var(--line); background: var(--surface); text-align: left; }
-.pick img, .pick .ph { width: 100%; height: 100%; object-fit: cover; }
+/* Tiles are sized with a padding-top spacer (not aspect-ratio on a <button>, which iOS Safari collapses so rows overlap),
+   and the photo is absolutely positioned so its own proportions can never stretch or shift a tile. */
+.pick-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start; gap: 8px; max-height: 340px; overflow-y: auto; margin: 4px -2px 8px; padding: 2px; -webkit-overflow-scrolling: touch; }
+.pick { position: relative; display: block; width: 100%; min-width: 0; padding: 0; border-radius: 10px; overflow: hidden; border: 1.5px solid var(--line); background: var(--surface); text-align: left; }
+.pick::before { content: ''; display: block; padding-top: 133.33%; }
+.pick img, .pick .ph { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .pick .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 6px 5px; font-size: 11px; line-height: 1.2; color: #fff; background: linear-gradient(transparent, rgba(28, 26, 24, .72)); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .pick .tick { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; background: var(--gold); color: var(--on-gold); font-size: 12px; display: none; place-items: center; }
 .pick.on { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
@@ -185,7 +193,7 @@ details.sub-fold[open] > summary { margin-bottom: 8px; }
 
 .collage { display: grid; gap: 6px; margin-bottom: 10px; }
 .collage figure { margin: 0; position: relative; overflow: hidden; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); aspect-ratio: 4 / 5; }
-.collage img, .collage .ph { width: 100%; height: 100%; object-fit: cover; }
+.collage img, .collage .ph { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .collage figcaption { position: absolute; left: 6px; bottom: 6px; padding: 3px 8px; border-radius: 999px; background: rgba(19, 19, 22, .85); color: var(--ink); font-size: 10.5px; max-width: calc(100% - 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .collage.c1 { grid-template-columns: 1fr; } .collage.c1 figure { aspect-ratio: 4 / 4.2; }
 .collage.c2 { grid-template-columns: 1fr 1fr; }
@@ -222,8 +230,8 @@ details.saved .look { border: 0; border-top: 1px solid var(--line); border-radiu
 /* ---------- Closet grid ---------- */
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tile { text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: block; }
-.tile .ph-wrap, .match .ph-wrap { aspect-ratio: 4 / 5; background: var(--surface); overflow: hidden; }
-.tile .ph-wrap img, .tile .ph-wrap .ph, .match .ph-wrap img, .match .ph-wrap .ph { width: 100%; height: 100%; object-fit: cover; }
+.tile .ph-wrap, .match .ph-wrap { position: relative; aspect-ratio: 4 / 5; background: var(--surface); overflow: hidden; }
+.tile .ph-wrap img, .tile .ph-wrap .ph, .match .ph-wrap img, .match .ph-wrap .ph { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .tile .meta { padding: 10px 12px 12px; }
 .tile strong { display: block; font-size: 13.5px; line-height: 1.25; margin-bottom: 6px; }
 .tags { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 11.5px; color: var(--sub); }

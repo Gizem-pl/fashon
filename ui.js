@@ -465,16 +465,7 @@ const SECTIONS = {
     <p class="hint center" id="photo-status">${d.previewUrl ? '' : 'Colour and contrast are read from the photo automatically.'}</p>`,
 
   suggest: d => {
-    const out = [];
-    if (d.autoMsg) out.push(`<p class="suggest ok">✦ ${esc(d.autoMsg)}</p>`);
-    else if (d.shapeSuggest && !d.categoryTouched) {
-      const s = d.shapeSuggest;
-      out.push(`<p class="suggest">Rough guess from the photo’s shape: <strong>${esc(catLabel(s.category))}</strong>
-        <button type="button" class="link strong" data-sheet="apply-shape">Use this</button></p>`);
-    }
-    if (d.isNew && !d.name.trim() && !d.categoryTouched && !d.autoMsg)
-      out.push(`<p class="hint">Tip: type a name like “black wool turtleneck” and I will pick the category, type, fabric and thickness for you.</p>`);
-    return out.join('');
+    return d.autoMsg ? `<p class="suggest ok">✦ ${esc(d.autoMsg)}</p>` : '';
   },
 
   type: d => {
@@ -484,6 +475,7 @@ const SECTIONS = {
 
   color: d => `
     <span>Colour</span>
+    ${d.previewUrl ? `<button type="button" class="btn ghost small eyedrop ${d.picking ? 'on' : ''}" data-sheet="eyedropper">${d.picking ? 'Tap the photo above… (cancel)' : '⌖ Pick colour from the photo'}</button>` : ''}
     <div class="swatches">${E.COLOR_NAMES.map(([n, h]) =>
       `<button type="button" class="sw ${h.toUpperCase() === d.color.hex.toUpperCase() ? 'on' : ''}" data-swatch="${h}" data-name="${esc(n)}" style="background:${h}" aria-label="${esc(n)}" title="${esc(n)}"></button>`).join('')}</div>
     <div class="color-row">
@@ -523,9 +515,10 @@ function refresh(...keys) {
   keys.forEach(k => { const el = $('#sec-' + k); if (el) el.innerHTML = SECTIONS[k](d); });
 }
 
+/** Leaving the name blank auto-names the piece (e.g. “Beige Turtleneck”); keep that visible. */
 function updateNamePlaceholder() {
   const d = state.draft, el = $('#f-name'); if (!d || !el) return;
-  el.placeholder = E.autoName(d.category, d.hasColor || !d.isNew ? d.color.name : '', d.subtype);
+  el.placeholder = d.isNew ? `e.g. black wool turtleneck — or leave blank for “${E.autoName(d.category, d.hasColor ? d.color.name : '', d.subtype)}”` : '';
 }
 
 function renderSheet() {
@@ -543,14 +536,14 @@ function renderSheet() {
     </header>
     <div class="sheet-body">
       ${sec('photo', 'plain')}
+      <label class="field name-field"><span>Name <small>${d.isNew ? 'type what it is and I will fill in category, fabric &amp; thickness' : ''}</small></span>
+        <input id="f-name" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="e.g. black wool turtleneck">
+      </label>
       ${sec('suggest', 'plain')}
       <label class="field"><span>Category</span>
         <select id="f-category">${E.CATEGORIES.map(c => `<option value="${c.id}" ${c.id === d.category ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select>
       </label>
       ${sec('type')}
-      <label class="field"><span>Name</span>
-        <input id="f-name" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="">
-      </label>
       ${sec('color')}
       ${sec('contrast')}
       ${sec('sil')}
@@ -595,6 +588,44 @@ function setColor(hex, name, fromNative) {
   updateNamePlaceholder();
 }
 
+/** Eyedropper: scroll up to the photo and let the user tap it to sample a colour. */
+function toggleEyedropper() {
+  const d = state.draft; if (!d) return;
+  if (!d.previewUrl) { toast('Add a photo first.'); return; }
+  d.picking = !d.picking;
+  refresh('color');
+  $('.upload')?.classList.toggle('picking', d.picking);
+  if (d.picking) {
+    $('#sec-photo')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    toast('Tap the garment in the photo');
+  }
+}
+
+function sampleFromPhoto(e, up) {
+  const d = state.draft; const img = $('img', up);
+  if (!d || !img || !img.naturalWidth) return;
+  const nw = img.naturalWidth, nh = img.naturalHeight, r = img.getBoundingClientRect();
+  const sc = Math.min(r.width / nw, r.height / nh);                       // the photo is letterboxed (object-fit: contain)
+  const ox = r.left + (r.width - nw * sc) / 2, oy = r.top + (r.height - nh * sc) / 2;
+  const px = Math.floor((e.clientX - ox) / sc), py = Math.floor((e.clientY - oy) / sc);
+  if (px < 0 || py < 0 || px >= nw || py >= nh) { toast('Tap on the garment itself.'); return; }
+  const cv = document.createElement('canvas'); cv.width = nw; cv.height = nh;
+  const ctx = cv.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0);
+  const R = 3, x0 = Math.max(0, px - R), y0 = Math.max(0, py - R);
+  const w = Math.min(nw - x0, 2 * R + 1), h = Math.min(nh - y0, 2 * R + 1);
+  const px4 = ctx.getImageData(x0, y0, w, h).data;
+  let rr = 0, gg = 0, bb = 0; const n = px4.length / 4;
+  for (let i = 0; i < px4.length; i += 4) { rr += px4[i]; gg += px4[i + 1]; bb += px4[i + 2]; }
+  const hex = E.rgbToHex(rr / n, gg / n, bb / n);
+  const name = E.colorName(hex);
+  setColor(hex, name, false);
+  d.picking = false;
+  refresh('color');
+  $('.upload')?.classList.remove('picking');
+  $('#sec-color')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toast(`Picked ${name.toLowerCase()}`);
+}
+
 /** Read the typed name and pre-fill category, type, fabric, thickness and sleeves — only fields the user has not set themselves. */
 function autoFromName() {
   const d = state.draft; if (!d) return;
@@ -633,7 +664,7 @@ async function handlePhoto(file) {
     d.color = color; d.hasColor = true;
     d.contrast = contrast; d.contrastTouched = false;
     if (!d.nameTouched) d.name = '';
-    d.shapeSuggest = d.isNew ? E.suggestFromShape(width, height) : null;
+    d.photoW = width; d.photoH = height; d.picking = false;
     refresh('photo', 'color', 'contrast', 'suggest');
     updateNamePlaceholder();
     const st = $('#photo-status');
@@ -704,13 +735,12 @@ function wireSheet() {
       if (a === 'close') closeSheet();
       if (a === 'save') saveDraft();
       if (a === 'delete') deleteDraft();
-      if (a === 'apply-shape' && d.shapeSuggest) {
-        const s = d.shapeSuggest; d.shapeSuggest = null;
-        setCategory(s.category, true);
-        d.autoMsg = `Set to ${catLabel(s.category)}. Pick the type below.`; refresh('suggest');
-      }
+      if (a === 'eyedropper') toggleEyedropper();
       return;
     }
+    // eyedropper mode: tapping the photo samples a colour instead of opening the file chooser
+    const up = e.target.closest('.upload');
+    if (up && d.picking && d.previewUrl) { e.preventDefault(); sampleFromPhoto(e, up); return; }
     const sw = e.target.closest('[data-swatch]');
     if (sw) { setColor(sw.dataset.swatch, sw.dataset.name, false); return; }
     const chip = e.target.closest('[data-chip]');

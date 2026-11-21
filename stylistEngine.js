@@ -196,15 +196,6 @@ export function suggestFromText(text) {
   return { ...(hit || {}), fabric: fab ? fab.label : '', thickness, sleeves };
 }
 
-/** Very rough guess from the photo's proportions only — shown as a hint, never applied silently. */
-export function suggestFromShape(w, h) {
-  if (!w || !h) return null;
-  const r = w / h;
-  if (r > 1.35) return { category: 'shoes', subtype: '' };
-  if (r < 0.62) return { category: 'dresses', subtype: '' };
-  return null;
-}
-
 /* ---------- Colour helpers ---------- */
 
 export function hexToRgb(hex) {
