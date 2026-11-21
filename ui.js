@@ -138,7 +138,7 @@ function renderStudio() {
       </div>
     </details>
 
-    <button class="btn primary wide big" data-act="generate">Create my 2 looks</button>
+    <button class="btn primary wide big" data-act="generate">Style Me</button>
 
     <div id="studio-results"></div>
     <div id="studio-saved"></div>

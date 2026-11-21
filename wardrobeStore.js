@@ -266,7 +266,7 @@ export function createCSV() {
 export async function restoreBackup(file, mode = 'merge') {
   let data;
   try { data = JSON.parse(await file.text()); } catch { throw new Error('That file is not a valid backup.'); }
-  if (data?.app !== 'quiet-closet' || !Array.isArray(data.items)) throw new Error('That does not look like a Quiet Closet backup.');
+  if (data?.app !== 'quiet-closet' || !Array.isArray(data.items)) throw new Error('That does not look like a Fashon backup.');
 
   if (mode === 'replace') {
     for (const it of getItems()) { revokePhotoURL(it.id); try { await deletePhoto(it.id); } catch {} }

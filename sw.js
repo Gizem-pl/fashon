@@ -1,5 +1,5 @@
 /* Offline shell: cache-first for app files, network-refresh in the background. Photos live in IndexedDB, not here. */
-const CACHE = 'quiet-closet-v2';
+const CACHE = 'fashon-v3';
 const ASSETS = ['./', './index.html', './style.css', './ui.js', './wardrobeStore.js', './stylistEngine.js',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
