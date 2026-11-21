@@ -596,7 +596,9 @@ function toggleEyedropper() {
   refresh('color');
   $('.upload')?.classList.toggle('picking', d.picking);
   if (d.picking) {
-    $('#sec-photo')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const body = $('.sheet-body');
+    if (body) body.scrollTo({ top: 0, behavior: 'smooth' });
+    else $('.upload')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     toast('Tap the garment in the photo');
   }
 }

@@ -126,6 +126,9 @@ export function layerPair(a, b) {
   else if (isSleeveless(a) !== isSleeveless(b)) { if (isSleeveless(a)) { inner = b; outer = a; } }
   else if (thicknessOf(a) > thicknessOf(b)) { inner = b; outer = a; }
   const ti = thicknessOf(inner), to = thicknessOf(outer), jacket = layerRank(outer) === 2;
+  const isCardi = x => /cardigan/i.test(`${x.subtype || ''} ${x.name || ''}`);
+  if (layerRank(a) === 1 && layerRank(b) === 1 && !isSleeveless(a) && !isSleeveless(b) && !isCardi(outer))
+    return { ok: false, inner, outer, penalty: 0, reason: `${inner.name} and ${outer.name} are both sleeved knits — nobody wears two sweaters on top of each other.` };
   if (ti === 3 && !jacket) return { ok: false, inner, outer, penalty: 0, reason: `${inner.name} is too thick to wear under another top — layering ${outer.name} over it would be bulky. A thin blouse or tee underneath would work.` };
   if (to < ti && !jacket) return { ok: false, inner, outer, penalty: 0, reason: `${outer.name} is thinner than ${inner.name}, so it will not sit over it. Layer it over a thin base such as a blouse or tee instead.` };
   let penalty = 0;
