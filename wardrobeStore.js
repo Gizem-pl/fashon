@@ -13,7 +13,8 @@ const LS = {
   checks: 'qc.checks.v1',
   moods: 'qc.moods.v1',
   wears: 'qc.wears.v1',
-  ai: 'qc.ai.v1'
+  ai: 'qc.ai.v1',
+  chat: 'qc.chat.v1'
 };
 const DB_NAME = 'quiet-closet';
 const DB_VERSION = 1;
@@ -96,6 +97,21 @@ export async function deleteWear(id) {
 export function getAISettings() { return { key: '', model: '', ...read(LS.ai, {}) }; }
 export function saveAISettings(s) { return write(LS.ai, s); }
 export function clearAISettings() { try { localStorage.removeItem(LS.ai); } catch {} }
+
+/* ---------- Stylist chat: [{ id, role, text, photo, outfits, packing, gaps, at }]. Attached photos live in IndexedDB under the message id. ---------- */
+
+const CHAT_MAX = 80;
+export function getChat() { return read(LS.chat, []); }
+export async function saveChat(list) {
+  const keep = list.slice(-CHAT_MAX);
+  const dropped = list.slice(0, Math.max(0, list.length - CHAT_MAX)).filter(m => m.photo);
+  for (const m of dropped) { revokePhotoURL(m.id); try { await deletePhoto(m.id); } catch {} }
+  return write(LS.chat, keep);
+}
+export async function clearChat() {
+  for (const m of getChat().filter(m => m.photo)) { revokePhotoURL(m.id); try { await deletePhoto(m.id); } catch {} }
+  try { localStorage.removeItem(LS.chat); } catch {}
+}
 
 /* ---------- Saved link checks ---------- */
 

@@ -33,8 +33,11 @@ const state = {
   tab: 'studio',
   items: [],
   closetFilter: 'all',
-  studio: { core: new Set(), pickFilter: 'all', moodText: '', moodChips: [], finish: {}, result: null, openFinish: false },
-  checker: { url: '', name: '', text: '', type: 'auto', fit: 'auto', kind: 'auto', color: null, report: null, activeId: null },
+  studio: { core: new Set(), pickFilter: 'all', moodText: '', moodChips: [], finish: {}, result: null, openFinish: false,
+            seg: 'create', collapsed: false, addingMood: false },
+  checker: { url: '', name: '', text: '', type: 'auto', fit: 'auto', kind: 'auto', color: null, report: null, activeId: null,
+             product: null, shots: [], reading: false, ai: null, aiBusy: false, openManual: false },
+  chat: { text: '', photo: null, photoUrl: '', busy: false },
   draft: null,
   wear: null,            // outfit-diary sheet draft
   openWear: null,        // diary entry currently expanded
@@ -77,6 +80,7 @@ function showTab(name) {
   try { sessionStorage.setItem('qc.tab', name); } catch {}
   if (name === 'studio') renderStudio();
   if (name === 'closet') renderCloset();
+  if (name === 'stylist') renderStylist();
   if (name === 'checker') renderChecker();
   if (name === 'profile') renderProfile();
 }
@@ -92,7 +96,7 @@ function renderStudio() {
 
   if (!state.items.length) {
     v.innerHTML = `
-      <header class="page-head"><p class="eyebrow">Creative Director</p><h1>Outfit Studio</h1>
+      <header class="page-head"><p class="eyebrow">${greeting()}</p><h1>Outfit <em>Studio</em></h1>
       <p class="sub">Two considered looks, built from the pieces you already own.</p></header>
       <div class="empty card">
         <h2>Your closet is empty</h2>
@@ -102,41 +106,69 @@ function renderStudio() {
     return;
   }
 
+  const looks = S.getLooks().length, wears = S.getWears().length;
+  const seg = (id, label, n) => `<button class="seg-btn ${s.seg === id ? 'on' : ''}" data-act="seg" data-seg="${id}" aria-pressed="${s.seg === id}">${label}${n ? ` <small>${n}</small>` : ''}</button>`;
   v.innerHTML = `
-    <header class="page-head"><p class="eyebrow">Creative Director</p><h1>Outfit Studio</h1>
-    <p class="sub">Two considered looks, built from your own closet.</p></header>
+    <header class="page-head"><p class="eyebrow">${greeting()}</p><h1>Outfit <em>Studio</em></h1></header>
+    <nav class="seg" aria-label="Studio sections">${seg('create', 'Create')}${seg('saved', 'Saved', looks)}${seg('diary', 'Diary', wears)}</nav>
+    ${s.seg === 'saved' ? '<div id="studio-saved"></div>' : s.seg === 'diary' ? '<div id="studio-diary"></div>' : studioCreateHTML(clothing)}
+  `;
+  if (s.seg === 'create') { if (!(s.result && s.collapsed)) renderPicker(); renderResults(); }
+  if (s.seg === 'saved') renderSavedLooks();
+  if (s.seg === 'diary') renderDiary();
+}
 
-    <section class="card">
-      <h2 class="step"><span>1</span>Core piece <em>required</em></h2>
-      <p class="hint">Choose one or more pieces to build the look around.</p>
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? 'Late night edit' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+/** The look builder, or — once looks are generated — a one-line summary of what they were built from. */
+function studioCreateHTML() {
+  const s = state.studio;
+  if (s.result && !s.result.error && s.collapsed) {
+    const core = [...s.core].map(itemById).filter(Boolean);
+    const moods = [...s.moodChips, s.moodText].filter(Boolean).join(' · ');
+    return `
+    <section class="card brief">
+      <div class="mini">${core.slice(0, 4).map(i => `<span>${pic(i)}</span>`).join('')}</div>
+      <div class="grow"><p class="eyebrow">Built around</p><strong>${esc(core.map(i => i.name).join(', ') || 'Your pieces')}</strong>
+        ${moods ? `<small>${esc(moods)}</small>` : ''}</div>
+      <button class="btn ghost small" data-act="edit-brief">Edit</button>
+    </section>
+    <div id="studio-results"></div>
+    <p class="center"><button class="link" data-act="start-over">Start over</button></p>`;
+  }
+  return `
+    <section class="card step-card">
+      <div class="step-row">
+        <h2 class="step"><span>01</span>Core piece</h2>
+        <button class="btn ghost small" data-act="surprise">✦ Surprise me</button>
+      </div>
       <div class="pills" id="pick-filters"></div>
       <div class="pick-grid" id="pick-grid"></div>
       <div class="row between">
         <span class="hint" id="core-count"></span>
         <button class="link" data-act="clear-core">Clear</button>
       </div>
-      <button class="btn ghost wide" data-act="surprise">✦ Surprise Me From My Closet</button>
     </section>
 
-    <section class="card">
-      <h2 class="step"><span>2</span>Mood &amp; feeling</h2>
-      <label class="field"><span>How do you want to feel today?</span>
-        <input id="mood-text" type="text" inputmode="text" autocomplete="off" placeholder="e.g. calm, warm, quietly confident" value="${esc(s.moodText)}">
-      </label>
-      <p class="hint">Tap one or more moods — I will blend them (up to 3).</p>
+    <section class="card step-card">
+      <h2 class="step"><span>02</span>Mood</h2>
+      <input id="mood-text" type="text" inputmode="text" autocomplete="off" aria-label="How do you want to feel today?" placeholder="How do you want to feel? e.g. calm, warm, quietly confident" value="${esc(s.moodText)}">
       <div class="chips" id="mood-chips">${moodChipsHTML()}</div>
+      ${s.addingMood ? `
       <div class="add-mood">
-        <input id="new-mood" type="text" autocomplete="off" maxlength="24" placeholder="Add your own mood, e.g. Gallery opening">
+        <input id="new-mood" type="text" autocomplete="off" maxlength="24" placeholder="Name it, e.g. Gallery opening">
         <select id="new-mood-base" aria-label="Feels most like">
           ${E.MOODS.map(m => `<option value="${esc(m)}">Feels like ${esc(m)}</option>`).join('')}
         </select>
         <button class="btn ghost small" data-act="add-mood">Add</button>
-      </div>
+      </div>` : ''}
     </section>
 
-    <details class="card fold" id="finish-fold" ${s.openFinish ? 'open' : ''}>
-      <summary><h2 class="step"><span>3</span>Finishing layers <em>optional</em></h2></summary>
-      <p class="hint">Skip any or all of these — looks generate without them.</p>
+    <details class="card fold step-card" id="finish-fold" ${s.openFinish ? 'open' : ''}>
+      <summary><h2 class="step"><span>03</span>Finishing touches <em>optional</em></h2></summary>
       <div class="finish-grid">
         ${FINISH_CATS.map(f => {
           const opts = state.items.filter(i => i.category === f.cat);
@@ -149,24 +181,18 @@ function renderStudio() {
       </div>
     </details>
 
-    <button class="btn primary wide big" data-act="generate">Style Me</button>
-    <button class="btn ghost wide" data-act="start-over">Start over</button>
+    <button class="btn primary wide big" data-act="generate">Style me</button>
+    <p class="center"><button class="link" data-act="start-over">Start over</button></p>
 
-    <div id="studio-results"></div>
-    <div id="studio-saved"></div>
-    <div id="studio-diary"></div>
-  `;
-  renderPicker();
-  renderResults();
-  renderSavedLooks();
-  renderDiary();
+    <div id="studio-results"></div>`;
 }
 
 function moodChipsHTML() {
   const on = new Set(state.studio.moodChips);
   const builtin = E.MOODS.map(m => `<button class="chip ${on.has(m) ? 'on' : ''}" data-act="mood-chip" data-mood="${esc(m)}" aria-pressed="${on.has(m)}">${esc(m)}</button>`);
   const custom = S.getCustomMoods().map(m => `<span class="chipset"><button class="chip ${on.has(m.name) ? 'on' : ''}" data-act="mood-chip" data-mood="${esc(m.name)}" aria-pressed="${on.has(m.name)}">${esc(m.name)}</button><button class="chipx" data-act="del-mood" data-id="${m.id}" aria-label="Remove ${esc(m.name)}">×</button></span>`);
-  return [...builtin, ...custom].join('');
+  const add = `<button class="chip add" data-act="toggle-add-mood" aria-expanded="${state.studio.addingMood}">${state.studio.addingMood ? '× Close' : '+ Your own'}</button>`;
+  return [...builtin, ...custom, add].join('');
 }
 
 /** Selected mood names → what the engine needs (custom moods carry the built-in mood they inherit from). */
@@ -212,6 +238,14 @@ function lookCard(look, idx, saved) {
   </article>`;
 }
 
+function updateSegCounts() {
+  const n = { saved: S.getLooks().length, diary: S.getWears().length };
+  $$('#view-studio .seg-btn').forEach(b => {
+    const k = b.dataset.seg; if (!(k in n)) return;
+    b.innerHTML = `${k === 'saved' ? 'Saved' : 'Diary'}${n[k] ? ` <small>${n[k]}</small>` : ''}`;
+  });
+}
+
 function renderResults() {
   const box = $('#studio-results');
   if (!box) return;
@@ -219,7 +253,7 @@ function renderResults() {
   if (!r) { box.innerHTML = ''; return; }
   if (r.error) { box.innerHTML = `<p class="note warn">${esc(r.error)}</p>`; return; }
   box.innerHTML = `
-    <div class="result-head"><p class="eyebrow">Today · ${esc(r.mood)}</p><p class="sub">Feeling ${esc(r.feeling)}.</p></div>
+    <div class="result-head"><p class="eyebrow">Today · ${esc(r.mood)}</p><h2>Feeling ${esc(r.feeling)}</h2></div>
     ${(r.warnings || []).map(w => `<p class="note warn">${esc(w)}</p>`).join('')}
     ${r.looks.map((l, i) => lookCard(l, i, S.isLookSaved(l.id))).join('')}
     <button class="btn ghost wide" data-act="generate">↻ Restyle</button>`;
@@ -229,9 +263,8 @@ function renderSavedLooks() {
   const box = $('#studio-saved');
   if (!box) return;
   const looks = S.getLooks();
-  if (!looks.length) { box.innerHTML = ''; return; }
+  if (!looks.length) { box.innerHTML = `<div class="empty quiet"><p class="lede">Nothing saved yet</p><p>Tap ♥ on any look — from the Studio or your Stylist — to keep it here.</p></div>`; return; }
   box.innerHTML = `
-    <h2 class="section-title">Saved looks <span>${looks.length}</span></h2>
     ${looks.map(l => `
       <details class="card saved">
         <summary>
@@ -250,6 +283,7 @@ function staleResult() {
 function startOver() {
   const s = state.studio;
   s.core.clear(); s.moodText = ''; s.moodChips = []; s.finish = {}; s.result = null; s.openFinish = false; s.pickFilter = 'all';
+  s.collapsed = false; s.addingMood = false;
   renderStudio();
   window.scrollTo({ top: 0, behavior: 'smooth' });
   toast('Cleared — start fresh');
@@ -269,8 +303,9 @@ function generate(surprise = false) {
   FINISH_CATS.forEach(f => { finish[f.key] = s.finish[f.key] ? itemById(s.finish[f.key]) || null : null; });
   const history = E.learnFromWears(S.getWears(), all);
   s.result = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChips: moodPicks(), finish, history });
-  renderResults();
-  $('#studio-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  s.collapsed = !s.result.error;
+  renderStudio();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function wireStudio() {
@@ -282,6 +317,9 @@ function wireStudio() {
     switch (b.dataset.act) {
       case 'goto-closet': showTab('closet'); break;
       case 'start-over': startOver(); break;
+      case 'seg': s.seg = b.dataset.seg; renderStudio(); break;
+      case 'edit-brief': s.collapsed = false; renderStudio(); break;
+      case 'toggle-add-mood': s.addingMood = !s.addingMood; renderStudio(); if (s.addingMood) $('#new-mood')?.focus(); break;
       case 'pick-filter': s.pickFilter = b.dataset.cat; renderPicker(); break;
       case 'toggle-core': {
         const id = b.dataset.id;
@@ -309,8 +347,8 @@ function wireStudio() {
         if (E.MOODS.some(m => m.toLowerCase() === name.toLowerCase())) { toast('That mood already exists.'); break; }
         if (!S.saveCustomMood({ name, base: $('#new-mood-base').value })) { toast('Could not save — storage may be full.'); break; }
         if (s.moodChips.length < 3 && !s.moodChips.includes(name)) s.moodChips = [...s.moodChips, name];
-        input.value = '';
-        $('#mood-chips').innerHTML = moodChipsHTML();
+        input.value = ''; s.addingMood = false;
+        renderStudio();
         staleResult(); toast(`Added “${name}”`);
         break;
       }
@@ -329,7 +367,7 @@ function wireStudio() {
           const look = s.result?.looks?.find(l => l.id === id);
           if (look) { S.saveLook(look); toast('Look saved ♥'); }
         }
-        renderResults(); renderSavedLooks();
+        renderResults(); renderSavedLooks(); updateSegCounts();
         break;
       }
       case 'wore-look': {
@@ -342,7 +380,7 @@ function wireStudio() {
       case 'ai-wear': askAIForEntry(b.dataset.id); break;
       case 'del-wear': {
         if (!confirm('Delete this outfit from your diary? The photo will be removed too.')) break;
-        S.deleteWear(b.dataset.id).then(() => { renderDiary(); toast('Removed from your diary'); });
+        S.deleteWear(b.dataset.id).then(() => { renderDiary(); updateSegCounts(); toast('Removed from your diary'); });
         break;
       }
     }
@@ -393,10 +431,9 @@ function renderDiary() {
   const box = $('#studio-diary');
   if (!box) return;
   const wears = S.getWears();
-  if (!wears.length) { box.innerHTML = ''; return; }
+  if (!wears.length) { box.innerHTML = `<div class="empty quiet"><p class="lede">Your diary is empty</p><p>Tap “I wore this” under any look to log it with a photo. Every entry teaches the stylist what works on you.</p></div>`; return; }
   const hasKey = !!S.getAISettings().key;
   box.innerHTML = `
-    <h2 class="section-title">Outfit diary <span>${wears.length}</span></h2>
     <p class="hint">Every outfit you log teaches the stylist what works on you.</p>
     ${wears.map(w => {
       const pieces = (w.itemIds || w.pieceIds || []).map(itemById).filter(Boolean);
@@ -540,16 +577,16 @@ async function saveWearDraft() {
   closeWearSheet();
   S.requestPersistence();
   state.openWear = rec.id;
-  renderDiary();
+  if (wasNew && state.tab === 'studio') { state.studio.seg = 'diary'; renderStudio(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  else { renderDiary(); updateSegCounts(); }
   toast(wasNew ? 'Added to your outfit diary' : 'Saved');
-  if (wasNew) $('#studio-diary')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function deleteWearDraft() {
   const w = state.wear; if (!w || w.isNew) return;
   if (!confirm('Delete this outfit from your diary? The photo will be removed too.')) return;
   await S.deleteWear(w.id);
-  closeWearSheet(); renderDiary(); toast('Removed from your diary');
+  closeWearSheet(); renderDiary(); updateSegCounts(); toast('Removed from your diary');
 }
 
 /** Everything Gemini needs about a wear, apart from the photo. */
@@ -634,7 +671,7 @@ function renderCloset() {
 
   v.innerHTML = `
     <header class="page-head row between">
-      <div><p class="eyebrow">Closet &amp; Vanity</p><h1>Your collection</h1>
+      <div><p class="eyebrow">Closet &amp; Vanity</p><h1>Your <em>collection</em></h1>
       <p class="sub" id="closet-sub">${state.items.length} piece${state.items.length === 1 ? '' : 's'}</p></div>
       <button class="btn primary round" data-act="add-item" aria-label="Add a piece">+</button>
     </header>
@@ -748,7 +785,10 @@ const SECTIONS = {
     <p class="hint center" id="photo-status">${d.previewUrl ? '' : 'Colour and contrast are read from the photo automatically.'}</p>`,
 
   suggest: d => {
-    return d.autoMsg ? `<p class="suggest ok">✦ ${esc(d.autoMsg)}</p>` : '';
+    const ai = d.aiBusy ? `<p class="suggest pulse">✦ Your stylist is looking at the photo…</p>`
+      : d.aiMsg ? `<p class="suggest ok">✦ ${esc(d.aiMsg)}</p>`
+      : d.aiErr ? `<p class="suggest">${esc(d.aiErr)} <button type="button" class="link strong" data-sheet="ai-fill">Try again</button></p>` : '';
+    return ai || (d.autoMsg ? `<p class="suggest ok">✦ ${esc(d.autoMsg)}</p>` : '');
   },
 
   type: d => {
@@ -819,7 +859,7 @@ function renderSheet() {
     </header>
     <div class="sheet-body">
       ${sec('photo', 'plain')}
-      <label class="field name-field"><span>Name <small>${d.isNew ? 'type what it is and I will fill in category, fabric &amp; thickness' : ''}</small></span>
+      <label class="field name-field"><span>Name <small>${d.isNew ? (S.getAISettings().key ? 'add a photo and your stylist fills in the rest' : 'type what it is and I will fill in category, fabric &amp; thickness') : ''}</small></span>
         <input id="f-name" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="e.g. black wool turtleneck">
       </label>
       ${sec('suggest', 'plain')}
@@ -954,8 +994,38 @@ async function handlePhoto(file) {
     updateNamePlaceholder();
     const st = $('#photo-status');
     if (st) st.textContent = `Detected ${color.name.toLowerCase()} · ${contrast.toLowerCase()} contrast`;
+    if (d.isNew && S.getAISettings().key) aiFill();
   } catch (err) {
     if (status) status.textContent = err.message || 'Could not read that photo.';
+  }
+}
+
+/** New piece + Gemini key: let the AI fill in everything the user has not set themselves. */
+async function aiFill() {
+  const d = state.draft; const ai = S.getAISettings();
+  if (!d || !ai.key || !d.blob || d.aiBusy) return;
+  d.aiBusy = true; d.aiErr = ''; d.aiMsg = ''; refresh('suggest');
+  try {
+    const r = await G.describePiece({ key: ai.key, model: ai.model || G.DEFAULT_MODEL, photo: d.blob });
+    if (state.draft !== d) return;
+    const filled = [];
+    if (r.category && !d.categoryTouched) { if (r.category !== d.category) setCategory(r.category, false); filled.push('category'); }
+    const cat = E.categoryById(d.category);
+    if (r.subtype && !d.subtypeTouched && cat.subtypes.includes(r.subtype)) { d.subtype = r.subtype; filled.push('type'); }
+    if (r.fabric && !d.fabricTouched && needsFabric(d.category)) { d.fabric = r.fabric; d.fabricError = false; filled.push('fabric'); }
+    if (r.silhouette && E.usesSilhouette(d.category) && !d.silTouched) d.silhouette = r.silhouette;
+    if (r.sleeves && d.category === 'tops' && !d.sleevesTouched) d.sleeves = r.sleeves; else autoSleeves(d);
+    if (r.thickness && usesThick(d.category) && !d.thickTouched) { d.thickness = r.thickness; filled.push('thickness'); } else autoThickness(d);
+    if (r.vibe.length && !d.vibeTouched && d.category !== 'perfume') d.vibe = r.vibe;
+    if (r.name && !d.nameTouched) { d.name = r.name; const el = $('#f-name'); if (el) el.value = r.name; filled.unshift('name'); }
+    d.aiMsg = filled.length ? `Filled in ${filled.join(', ')} from the photo — tap anything to change it.` : 'Looked at the photo — your choices are kept.';
+    d.autoMsg = '';
+    refresh('type', 'sil', 'sleeves', 'fabric', 'thick', 'vibe');
+    updateNamePlaceholder();
+  } catch (err) {
+    if (state.draft === d) d.aiErr = err.message || 'The AI could not read this photo.';
+  } finally {
+    if (state.draft === d) { d.aiBusy = false; refresh('suggest'); }
   }
 }
 
@@ -1021,6 +1091,7 @@ function wireSheet() {
       if (a === 'save') saveDraft();
       if (a === 'delete') deleteDraft();
       if (a === 'eyedropper') toggleEyedropper();
+      if (a === 'ai-fill') aiFill();
       return;
     }
     // eyedropper mode: tapping the photo samples a colour instead of opening the file chooser
@@ -1031,7 +1102,7 @@ function wireSheet() {
     const chip = e.target.closest('[data-chip]');
     if (!chip) return;
     const k = chip.dataset.chip, v = chip.dataset.v;
-    if (k === 'vibe') { d.vibe = d.vibe.includes(v) ? d.vibe.filter(x => x !== v) : [...d.vibe, v]; refresh('vibe'); }
+    if (k === 'vibe') { d.vibe = d.vibe.includes(v) ? d.vibe.filter(x => x !== v) : [...d.vibe, v]; d.vibeTouched = true; refresh('vibe'); }
     else if (k === 'contrast') { d.contrast = v; d.contrastTouched = true; refresh('contrast'); }
     else if (k === 'subtype') {
       d.subtype = d.subtype === v ? '' : v; d.subtypeTouched = true;
@@ -1044,7 +1115,7 @@ function wireSheet() {
     }
     else if (k === 'thickness') { d.thickness = v; d.thickTouched = true; refresh('thick'); }
     else if (k === 'sleeves') { d.sleeves = v; d.sleevesTouched = true; refresh('sleeves'); }
-    else if (k === 'silhouette') { d.silhouette = d.silhouette === v ? '' : v; refresh('sil'); }
+    else if (k === 'silhouette') { d.silhouette = d.silhouette === v ? '' : v; d.silTouched = true; refresh('sil'); }
     else if (k === 'scentMood') { d.scentMood = d.scentMood === v ? '' : v; refresh('vibe'); }
   });
   root.addEventListener('input', e => {
@@ -1069,6 +1140,229 @@ function wireSheet() {
 }
 
 /* ======================================================================
+   STYLIST — chat with Gemini about what to wear, trips, and (only when asked) closet gaps
+   ====================================================================== */
+
+const CHAT_PHOTO_W = 1024;
+const PROMPTS = [
+  { label: 'What should I wear today?', text: 'What should I wear today?' },
+  { label: 'Dinner tonight', text: 'Dinner out tonight — I want to feel elegant but warm. What should I wear?' },
+  { label: 'Pack for a trip', text: 'Pack for a trip: __ days in __. Weather: __. Plans: __.', fill: true },
+  { label: 'Style one piece', text: 'Give me three different ways to wear my ', fill: true },
+  { label: 'What am I missing?', text: 'Looking at my closet, what am I missing? I buy slowly, so only the few pieces that would make the biggest difference.' }
+];
+
+/** Light formatting for AI text: paragraphs, "- " bullets and **bold**. Everything is escaped first. */
+function richText(t) {
+  const inline = x => esc(x).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  const out = []; let list = [];
+  const flush = () => { if (list.length) { out.push(`<ul class="bullets">${list.map(li => `<li>${inline(li)}</li>`).join('')}</ul>`); list = []; } };
+  String(t || '').split('\n').forEach(line => {
+    const m = line.match(/^\s*(?:[-•*]|\d+[.)])\s+(.*)$/);
+    if (m) { list.push(m[1]); return; }
+    flush();
+    if (line.trim()) out.push(`<p>${inline(line.trim())}</p>`);
+  });
+  flush();
+  return out.join('');
+}
+
+/** An AI outfit as a look object the rest of the app understands (save, "I wore this"). */
+function chatLook(msg, idx) {
+  const o = msg.outfits[idx];
+  return {
+    id: `${msg.id}_${idx}`, title: o.title, tagline: o.note, mood: 'AI Stylist', itemIds: o.itemIds, pieceIds: o.itemIds,
+    notes: o.note ? [{ label: 'Stylist', text: o.note }] : [], source: 'chat'
+  };
+}
+
+function chatMsgHTML(m) {
+  if (m.role === 'user') {
+    const photo = m.photo ? S.photoURLSync(m.id) : '';
+    return `<div class="msg me">${photo ? `<img class="msg-photo" src="${photo}" alt="Your photo">` : ''}${m.text ? `<p>${esc(m.text)}</p>` : ''}</div>`;
+  }
+  if (m.error) return `<div class="msg ai err"><p>${esc(m.text)}</p><button class="link" data-act="chat-retry">Try again</button></div>`;
+  const outfits = (m.outfits || []).map((o, i) => {
+    const look = chatLook(m, i), saved = S.isLookSaved(look.id);
+    const pieces = o.itemIds.map(itemById).filter(Boolean);
+    if (!pieces.length) return '';
+    return `<article class="chat-look">
+      <header class="look-head">
+        <div><p class="eyebrow">Look ${i + 1}</p><h3>${esc(o.title)}</h3></div>
+        <button class="heart ${saved ? 'on' : ''}" data-act="chat-save" data-mid="${m.id}" data-idx="${i}" aria-pressed="${saved}" aria-label="${saved ? 'Remove from saved looks' : 'Save look'}">${HEART}</button>
+      </header>
+      ${collage(o.itemIds)}
+      ${o.note ? `<p class="look-note">${esc(o.note)}</p>` : ''}
+      <button class="btn ghost wide small" data-act="chat-wore" data-mid="${m.id}" data-idx="${i}">I wore this</button>
+    </article>`;
+  }).join('');
+  const pack = m.packing ? (() => {
+    const pieces = m.packing.itemIds.map(itemById).filter(Boolean);
+    return `<section class="pack">
+      <p class="eyebrow">Packing list · ${pieces.length} piece${pieces.length === 1 ? '' : 's'}</p><h3>${esc(m.packing.title)}</h3>
+      <div class="pack-grid">${pieces.map(p => `<figure>${pic(p)}<figcaption>${esc(p.name)}</figcaption></figure>`).join('')}</div>
+      ${m.packing.tips?.length ? `<ul class="bullets">${m.packing.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+      <button class="btn ghost wide small" data-act="chat-copy-pack" data-mid="${m.id}">Copy as a checklist</button>
+    </section>`;
+  })() : '';
+  const gaps = m.gaps?.length ? `<section class="gaps"><p class="eyebrow">Worth considering, slowly</p>
+    ${m.gaps.map((g, i) => `<div class="gap"><span class="gap-n">${String(i + 1).padStart(2, '0')}</span><div><strong>${esc(g.piece)}</strong><small>${esc(g.why)}${g.unlocks ? ` · about ${g.unlocks} new outfit${g.unlocks === 1 ? '' : 's'}` : ''}</small></div></div>`).join('')}
+  </section>` : '';
+  return `<div class="msg ai">${richText(m.text)}</div>${outfits}${pack}${gaps}`;
+}
+
+function renderStylist() {
+  const v = $('#view-stylist');
+  const key = S.getAISettings().key;
+  const msgs = S.getChat();
+  const c = state.chat;
+  if (!key) {
+    v.innerHTML = `
+      <header class="page-head"><p class="eyebrow">AI Stylist</p><h1>Your <em>stylist</em></h1>
+      <p class="sub">Ask what to wear, pack for a trip, or send a mirror photo for an honest second look — always from your own closet.</p></header>
+      <div class="card empty">
+        <p class="lede">One small step first</p>
+        <p>Add your free Google Gemini key in Profile and your stylist is ready.</p>
+        <button class="btn primary" data-act="goto-profile">Add my key</button>
+      </div>`;
+    return;
+  }
+  v.innerHTML = `
+    <header class="page-head row between">
+      <div><p class="eyebrow">AI Stylist</p><h1>Your <em>stylist</em></h1></div>
+      ${msgs.length ? `<button class="link" data-act="chat-clear">Clear</button>` : ''}
+    </header>
+    <div class="thread" id="thread">
+      ${msgs.length ? msgs.map(chatMsgHTML).join('') : `
+        <div class="hello">
+          <p class="lede">What shall we wear?</p>
+          <p class="hint">I know your ${state.items.length} piece${state.items.length === 1 ? '' : 's'}, your proportions and your diary. Ask anything.</p>
+        </div>`}
+      ${c.busy ? `<div class="msg ai typing" aria-label="Stylist is thinking"><i></i><i></i><i></i></div>` : ''}
+    </div>
+    ${!msgs.length || !c.busy ? `<div class="prompts" id="prompts">${PROMPTS.map((p, i) => `<button class="chip" data-act="chat-prompt" data-i="${i}">${esc(p.label)}</button>`).join('')}</div>` : ''}
+    <form class="composer" id="composer" autocomplete="off">
+      ${c.photoUrl ? `<div class="composer-photo"><img src="${c.photoUrl}" alt="Attached photo"><button type="button" data-act="chat-unphoto" aria-label="Remove photo">×</button></div>` : ''}
+      <div class="composer-row">
+        <label class="icon-btn" aria-label="Attach a photo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.8l1.4-2h4.6l1.4 2h1.8A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.3" r="3.4"/></svg><input type="file" accept="image/*" id="chat-photo" hidden></label>
+        <textarea id="chat-input" rows="1" placeholder="Ask your stylist…" enterkeyhint="send">${esc(c.text)}</textarea>
+        <button type="submit" class="send" aria-label="Send" ${c.busy ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+      </div>
+    </form>`;
+  autosize($('#chat-input'));
+  scrollThread();
+}
+
+function autosize(el) { if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px'; }
+function scrollThread() { requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })); }
+
+async function sendChat(retry = false) {
+  const c = state.chat;
+  if (c.busy) return;
+  let msgs = S.getChat();
+  let photo = null;
+  if (retry) {
+    msgs = msgs.filter(m => !m.error);
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== 'user') return;
+    if (last.photo) photo = await S.getPhoto(last.id).catch(() => null);
+  } else {
+    const text = ($('#chat-input')?.value ?? c.text).trim();
+    if (!text && !c.photo) { toast('Type a question or add a photo.'); return; }
+    const msg = { id: S.newId('m'), role: 'user', text, photo: !!c.photo, at: Date.now() };
+    if (c.photo) {
+      try { await S.putPhoto(msg.id, c.photo); await S.getPhotoURL(msg.id); photo = c.photo; }
+      catch { toast('Could not store the photo — storage may be full.'); return; }
+    }
+    msgs = [...msgs, msg];
+    if (c.photoUrl) URL.revokeObjectURL(c.photoUrl);
+    c.text = ''; c.photo = null; c.photoUrl = '';
+  }
+  await S.saveChat(msgs);
+  c.busy = true; renderStylist();
+  const ai = S.getAISettings();
+  let reply;
+  try {
+    const res = await G.chat({
+      key: ai.key, model: ai.model || G.DEFAULT_MODEL, messages: msgs, photo,
+      closet: state.items, profile: S.getProfile(), wears: S.getWears(), looks: S.getLooks()
+    });
+    reply = { id: S.newId('m'), role: 'model', text: res.reply, outfits: res.outfits, packing: res.packing, gaps: res.gaps, at: Date.now() };
+  } catch (err) {
+    reply = { id: S.newId('m'), role: 'model', error: true, text: err.message || 'Something went wrong.', at: Date.now() };
+  }
+  await S.saveChat([...msgs, reply]);
+  c.busy = false;
+  if (state.tab === 'stylist') renderStylist();
+  else toast('Your stylist replied ✦');
+}
+
+async function attachChatPhoto(file) {
+  const c = state.chat;
+  try {
+    const { blob } = await S.processPhoto(file, CHAT_PHOTO_W);
+    if (c.photoUrl) URL.revokeObjectURL(c.photoUrl);
+    c.photo = blob; c.photoUrl = URL.createObjectURL(blob);
+    c.text = $('#chat-input')?.value ?? c.text;
+    renderStylist();
+    $('#chat-input')?.focus();
+  } catch (err) { toast(err.message || 'Could not read that photo.'); }
+}
+
+function findChatLook(mid, idx) {
+  const m = S.getChat().find(x => x.id === mid);
+  return m?.outfits?.[idx] ? chatLook(m, +idx) : null;
+}
+
+function wireStylist() {
+  const v = $('#view-stylist');
+  v.addEventListener('click', async e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const c = state.chat;
+    switch (b.dataset.act) {
+      case 'goto-profile': showTab('profile'); setTimeout(() => $('#ai-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60); break;
+      case 'chat-prompt': {
+        const p = PROMPTS[+b.dataset.i]; if (!p) break;
+        if (p.fill) {
+          const el = $('#chat-input'); el.value = p.text; c.text = p.text; autosize(el); el.focus();
+          const at = p.text.indexOf('__'); if (at >= 0) el.setSelectionRange(at, at + 2); else el.setSelectionRange(p.text.length, p.text.length);
+        } else { const el = $('#chat-input'); if (el) el.value = p.text; sendChat(); }
+        break;
+      }
+      case 'chat-unphoto': if (c.photoUrl) URL.revokeObjectURL(c.photoUrl); c.photo = null; c.photoUrl = ''; c.text = $('#chat-input')?.value ?? c.text; renderStylist(); break;
+      case 'chat-retry': sendChat(true); break;
+      case 'chat-clear':
+        if (!confirm('Clear the whole conversation? Saved looks and your diary stay.')) break;
+        await S.clearChat(); renderStylist(); break;
+      case 'chat-save': {
+        const look = findChatLook(b.dataset.mid, b.dataset.idx); if (!look) break;
+        if (S.isLookSaved(look.id)) { S.removeLook(look.id); toast('Removed from saved looks'); }
+        else { S.saveLook(look); toast('Look saved ♥ — find it in Studio › Saved'); }
+        const on = S.isLookSaved(look.id); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+        break;
+      }
+      case 'chat-wore': { const look = findChatLook(b.dataset.mid, b.dataset.idx); if (look) openWearSheet({ look }); break; }
+      case 'chat-copy-pack': {
+        const m = S.getChat().find(x => x.id === b.dataset.mid); if (!m?.packing) break;
+        const list = `${m.packing.title}\n` + m.packing.itemIds.map(itemById).filter(Boolean).map(i => `☐ ${i.name}`).join('\n');
+        try { await navigator.clipboard.writeText(list); toast('Checklist copied — paste it into Notes'); }
+        catch { toast('Could not copy on this device.'); }
+        break;
+      }
+    }
+  });
+  v.addEventListener('submit', e => { e.preventDefault(); sendChat(); });
+  v.addEventListener('input', e => { if (e.target.id === 'chat-input') { state.chat.text = e.target.value; autosize(e.target); } });
+  v.addEventListener('keydown', e => {
+    // Enter sends on a hardware keyboard; Shift+Enter adds a line. On phones the return key keeps adding lines.
+    if (e.target.id === 'chat-input' && e.key === 'Enter' && !e.shiftKey && !e.isComposing && matchMedia('(hover: hover)').matches) { e.preventDefault(); sendChat(); }
+  });
+  v.addEventListener('change', e => { if (e.target.id === 'chat-photo' && e.target.files?.[0]) attachChatPhoto(e.target.files[0]); });
+  v.addEventListener('focusin', e => { if (e.target.id === 'chat-input') document.body.classList.add('typing'); });
+  v.addEventListener('focusout', e => { if (e.target.id === 'chat-input') document.body.classList.remove('typing'); });
+}
+
+/* ======================================================================
    TAB 3 — FIT & STYLE LINK CHECKER
    ====================================================================== */
 
@@ -1079,46 +1373,66 @@ function renderChecker() {
   const v = $('#view-checker');
   const c = state.checker;
   const checks = S.getChecks();
+  const hasKey = !!S.getAISettings().key;
+  const manualOpen = !hasKey || c.openManual || (!c.product && !!c.text.trim());
   v.innerHTML = `
-    <header class="page-head"><p class="eyebrow">Fit &amp; Style</p><h1>Link checker</h1>
-    <p class="sub">Paste a piece you are considering. I will check size, fabric and what you already own to wear with it.</p></header>
+    <header class="page-head row between">
+      <div><p class="eyebrow">Fit &amp; Style</p><h1>Link <em>checker</em></h1></div>
+      ${c.url || c.text || c.report ? `<button class="link" data-act="check-new">New piece</button>` : ''}
+    </header>
+    <p class="sub lead-sub">${hasKey ? 'Paste a link to a piece you are considering. Your stylist reads the page — sizes, fabric, fit — and checks it against your body and your closet.' : 'Paste a piece you are considering. I will check size, fabric and what you already own to wear with it.'}</p>
 
     <section class="card">
       <label class="field"><span>Product link</span>
         <input id="c-url" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://store.com/product…" value="${esc(c.url)}">
       </label>
-      <label class="field"><span>Piece name <small>optional</small></span>
-        <input id="c-name" type="text" placeholder="e.g. Merino wool wrap cardigan" value="${esc(c.name)}">
-      </label>
-      <label class="field"><span>Description, fabric &amp; size chart</span>
-        <textarea id="c-text" rows="9" placeholder="Paste from the store page:&#10;• description&#10;• composition, e.g. 80% wool, 20% polyamide&#10;• size chart, e.g.&#10;Size  Bust  Waist  Hips  Length&#10;S  98  84  100  62&#10;M  102  88  104  63">${esc(c.text)}</textarea>
-      </label>
+      ${hasKey ? `
+        <div class="row gap">
+          <button class="btn primary grow" data-act="read-link" ${c.reading ? 'disabled' : ''}>${c.reading === 'link' ? 'Reading the page…' : '✦ Read & check'}</button>
+          <button class="btn ghost" data-act="open-url" aria-label="Open the store page">Open ↗</button>
+        </div>
+        <div id="c-status">${checkStatusHTML()}</div>
+        <div class="shots">
+          ${c.shots.map((x, i) => `<figure><img src="${x.url}" alt="Screenshot ${i + 1}"><button data-act="shot-del" data-i="${i}" aria-label="Remove screenshot">×</button></figure>`).join('')}
+          ${c.shots.length < 4 ? `<label class="shot-add"><input type="file" accept="image/*" id="c-shots" multiple hidden><span>+</span><small>${c.shots.length ? 'Add more' : 'Screenshots'}</small></label>` : ''}
+        </div>
+        ${c.shots.length ? `<button class="btn ghost wide" data-act="read-shots" ${c.reading ? 'disabled' : ''}>${c.reading === 'shots' ? 'Reading your screenshots…' : `✦ Read ${c.shots.length} screenshot${c.shots.length === 1 ? '' : 's'}`}</button>`
+          : `<p class="hint">If a shop hides its size chart, add screenshots of the product page and the size table instead — no copying needed.</p>`}
+      ` : `<p class="hint">Add your Gemini key in Profile and the checker will read the link for you. Until then, paste the details below.</p>`}
 
-      <details class="fold sub-fold" ${c.type !== 'auto' || c.fit !== 'auto' || c.kind !== 'auto' ? 'open' : ''}>
-        <summary>Adjust what I detect</summary>
-        <div class="finish-grid">
-          <label class="field"><span>Garment</span><select id="c-type">
-            <option value="auto">Auto-detect</option>${Object.entries(TYPE_LABELS).map(([k, l]) => `<option value="${k}" ${c.type === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-          <label class="field"><span>Intended fit</span><select id="c-fit">
-            <option value="auto">Auto-detect</option>${Object.entries(FIT_LABELS).map(([k, l]) => `<option value="${k}" ${c.fit === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-          <label class="field"><span>Size chart shows</span><select id="c-kind">
-            <option value="auto" ${c.kind === 'auto' ? 'selected' : ''}>Auto-detect</option>
-            <option value="garment" ${c.kind === 'garment' ? 'selected' : ''}>Garment measurements</option>
-            <option value="body" ${c.kind === 'body' ? 'selected' : ''}>Body size chart</option></select></label>
-          <div class="field"><span>Piece colour</span>
-            <div class="color-row">
-              <input type="color" id="c-color" value="${esc(c.color?.hex || '#C9B79C')}" aria-label="Piece colour">
-              <label class="btn ghost small">From photo<input type="file" accept="image/*" id="c-photo" hidden></label>
+      <details class="fold sub-fold" id="manual-fold" ${manualOpen ? 'open' : ''}>
+        <summary>${hasKey ? 'What I read — or paste it yourself' : 'Paste the details'}</summary>
+        <label class="field"><span>Piece name <small>optional</small></span>
+          <input id="c-name" type="text" placeholder="e.g. Merino wool wrap cardigan" value="${esc(c.name)}">
+        </label>
+        <label class="field"><span>Description, fabric &amp; size chart</span>
+          <textarea id="c-text" rows="8" placeholder="Paste from the store page:&#10;• description&#10;• composition, e.g. 80% wool, 20% polyamide&#10;• size chart, e.g.&#10;Size  Bust  Waist  Hips  Length&#10;S  98  84  100  62&#10;M  102  88  104  63">${esc(c.text)}</textarea>
+        </label>
+        <details class="fold sub-fold" ${c.type !== 'auto' || c.fit !== 'auto' || c.kind !== 'auto' ? 'open' : ''}>
+          <summary>Adjust what I detect</summary>
+          <div class="finish-grid">
+            <label class="field"><span>Garment</span><select id="c-type">
+              <option value="auto">Auto-detect</option>${Object.entries(TYPE_LABELS).map(([k, l]) => `<option value="${k}" ${c.type === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+            <label class="field"><span>Intended fit</span><select id="c-fit">
+              <option value="auto">Auto-detect</option>${Object.entries(FIT_LABELS).map(([k, l]) => `<option value="${k}" ${c.fit === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+            <label class="field"><span>Size chart shows</span><select id="c-kind">
+              <option value="auto" ${c.kind === 'auto' ? 'selected' : ''}>Auto-detect</option>
+              <option value="garment" ${c.kind === 'garment' ? 'selected' : ''}>Garment measurements</option>
+              <option value="body" ${c.kind === 'body' ? 'selected' : ''}>Body size chart</option></select></label>
+            <div class="field"><span>Piece colour</span>
+              <div class="color-row">
+                <input type="color" id="c-color" value="${esc(c.color?.hex || '#C9B79C')}" aria-label="Piece colour">
+                <label class="btn ghost small">From photo<input type="file" accept="image/*" id="c-photo" hidden></label>
+              </div>
+              <small class="hint">${c.color ? `Using ${esc(c.color.name)}` : 'Detected from the text when possible'}</small>
             </div>
-            <small class="hint">${c.color ? `Using ${esc(c.color.name)}` : 'Detected from the text when possible'}</small>
           </div>
+        </details>
+        <div class="row gap">
+          <button class="btn ${hasKey ? 'ghost' : 'primary'} grow" data-act="analyse">Analyse piece</button>
+          ${hasKey ? '' : `<button class="btn ghost" data-act="open-url">Open store ↗</button>`}
         </div>
       </details>
-
-      <div class="row gap">
-        <button class="btn primary grow" data-act="analyse">Analyse piece</button>
-        <button class="btn ghost" data-act="open-url">Open store ↗</button>
-      </div>
     </section>
 
     <div id="check-report"></div>
@@ -1135,6 +1449,11 @@ function renderChecker() {
         </div>`).join('')}` : ''}
   `;
   renderReport();
+}
+
+function checkStatusHTML() {
+  const st = state.checker.status;
+  return st ? `<p class="note ${st.warn ? 'warn' : ''}">${esc(st.text)}</p>` : '';
 }
 
 function currentChecker() {
@@ -1211,7 +1530,130 @@ function renderReport() {
     <section class="card"><h2 class="section-h">Fit &amp; size</h2>${sizeHtml}</section>
     <section class="card"><h2 class="section-h">Fabric quality</h2>${fabricHtml}</section>
     <section class="card"><h2 class="section-h">Already in your closet</h2>${matchHtml}</section>
+    <div id="check-ai"></div>
     <button class="btn ghost wide" data-act="save-check">Save this piece</button>`;
+  renderCheckAI();
+}
+
+const VERDICT_LABEL = { buy: 'Worth it', wait: 'Sleep on it', skip: 'Let it go' };
+
+function renderCheckAI() {
+  const box = $('#check-ai'); if (!box) return;
+  const c = state.checker;
+  if (!S.getAISettings().key) { box.innerHTML = ''; return; }
+  if (c.aiBusy) { box.innerHTML = `<section class="card ai-opinion"><p class="eyebrow">Your stylist</p><p class="verdict-line pulse">Thinking it over…</p></section>`; return; }
+  const a = c.ai;
+  if (!a) { box.innerHTML = `<button class="btn ghost wide" data-act="ask-piece-ai">✦ Ask my stylist for a second opinion</button>`; return; }
+  const pairs = a.pairWith.map(itemById).filter(Boolean);
+  const row = (label, t) => t ? `<div><dt>${label}</dt><dd>${esc(t)}</dd></div>` : '';
+  box.innerHTML = `
+    <section class="card ai-opinion v-${a.verdict}">
+      <div class="row between"><p class="eyebrow">Your stylist’s view</p><span class="verdict-pill">${VERDICT_LABEL[a.verdict]}</span></div>
+      <p class="verdict-line">${esc(a.headline)}</p>
+      <dl class="notes">${row('Size', a.size)}${row('Quality', a.quality)}${row('Your style', a.style)}${row(a.verdict === 'buy' ? 'Also' : 'Instead', a.instead)}</dl>
+      ${pairs.length ? `<h4 class="notes-title">Wear it with${a.outfits ? ` <small>· about ${a.outfits} outfit${a.outfits === 1 ? '' : 's'} with what you own</small>` : ''}</h4>
+        <div class="match-row">${pairs.map(i => `<div class="match"><div class="ph-wrap">${pic(i)}</div><strong>${esc(i.name)}</strong></div>`).join('')}</div>` : ''}
+      <button class="link" data-act="ask-piece-ai">↻ Ask again</button>
+    </section>`;
+}
+
+function resetChecker() {
+  const c = state.checker;
+  c.shots.forEach(x => URL.revokeObjectURL(x.url));
+  Object.assign(c, { url: '', name: '', text: '', type: 'auto', fit: 'auto', kind: 'auto', color: null, report: null, activeId: null,
+    product: null, shots: [], reading: false, ai: null, aiBusy: false, status: null, openManual: false });
+}
+
+const SHOT_W = 1400;   // screenshots stay sharp enough for the AI to read a size table
+async function addShots(files) {
+  const c = state.checker;
+  currentChecker();
+  for (const f of files.slice(0, 4 - c.shots.length)) {
+    try { const { blob } = await S.processPhoto(f, SHOT_W); c.shots.push({ blob, url: URL.createObjectURL(blob) }); }
+    catch { toast('Could not read one of those images.'); }
+  }
+  renderChecker();
+}
+
+/** Merge what was read (link and/or screenshots) into the checker, then run the analysis and the AI opinion. */
+function applyProduct(p) {
+  const c = state.checker;
+  const prev = c.product;
+  const merged = prev ? { ...prev } : { ...p };
+  if (prev) {
+    for (const k of ['name', 'brand', 'price', 'colour', 'composition', 'description', 'garment', 'fit', 'chartSource']) if (p[k]) merged[k] = p[k];
+    if (p.sizes.length) { merged.sizes = p.sizes; merged.chartKind = p.chartKind; }
+    merged.found = prev.found || p.found;
+    merged.missing = p.missing;
+  }
+  c.product = merged;
+  c.name = [merged.brand && !merged.name.toLowerCase().includes(merged.brand.toLowerCase()) ? merged.brand : '', merged.name].filter(Boolean).join(' ');
+  c.text = G.productToText(merged);
+  c.type = merged.garment || 'auto'; c.fit = merged.fit || 'auto'; c.kind = merged.chartKind || 'auto'; c.color = null;
+  return merged;
+}
+
+function readSummary(p) {
+  const got = [p.composition && 'fabric', p.sizes.length && `size chart (${p.sizes.length} sizes)`, p.description && 'fit'].filter(Boolean);
+  const src = p.chartSource && p.sizes.length ? ` Size chart from ${p.chartSource}.` : '';
+  return `Read ${got.length ? got.join(', ') : 'the basics'}${p.price ? ` · ${p.price}` : ''}.${src}`;
+}
+
+async function readLink() {
+  const c = state.checker;
+  currentChecker();
+  let u;
+  try { u = new URL(c.url); if (!/^https?:$/.test(u.protocol)) throw 0; } catch { toast('Paste a valid https:// link first.'); return; }
+  const ai = S.getAISettings();
+  if (c.product?.url && c.product.url !== u.href) { const url = c.url; resetChecker(); c.url = url; }
+  c.reading = 'link'; c.status = { text: `Opening ${hostOf(u.href)}…` }; renderChecker();
+  try {
+    const p = await G.readProductLink({ key: ai.key, model: ai.model || G.DEFAULT_MODEL, url: u.href });
+    if (!p.found && !p.sizes.length && !p.composition) {
+      c.status = { warn: true, text: p.blocked
+        ? `${hostOf(u.href)} would not let me in. Add screenshots of the product page and its size table below, and I will read those instead.`
+        : 'I could not see this product on the page. Add screenshots of the product page and its size table below, and I will read those instead.' };
+      return;
+    }
+    const m = applyProduct({ ...p, url: u.href }); c.product.url = u.href;
+    c.status = m.sizes.length
+      ? { text: readSummary(m) + ' Check it below if you like.' }
+      : { warn: true, text: `${readSummary(m)} The size chart was hidden — add a screenshot of the size table and I will read it.` };
+    c.report = runAnalysis(c); c.ai = null;
+  } catch (err) { c.status = { warn: true, text: err.message || 'Could not read that link.' }; }
+  finally { c.reading = false; renderChecker(); }
+  if (c.report) { $('#check-report')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); askPieceAI(); }
+}
+
+async function readShots() {
+  const c = state.checker;
+  currentChecker();
+  if (!c.shots.length) return;
+  const ai = S.getAISettings();
+  c.reading = 'shots'; c.status = { text: 'Reading your screenshots…' }; renderChecker();
+  try {
+    const p = await G.readProductImages({ key: ai.key, model: ai.model || G.DEFAULT_MODEL, images: c.shots.map(x => x.blob), url: c.url });
+    const m = applyProduct(p);
+    c.status = m.sizes.length ? { text: readSummary(m) } : { warn: true, text: `${readSummary(m)} I could not find a size table — add a screenshot that shows it.` };
+    c.report = runAnalysis(c); c.ai = null;
+  } catch (err) { c.status = { warn: true, text: err.message || 'Could not read those screenshots.' }; }
+  finally { c.reading = false; renderChecker(); }
+  if (c.report) { $('#check-report')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); askPieceAI(); }
+}
+
+async function askPieceAI() {
+  const c = state.checker;
+  const ai = S.getAISettings();
+  if (!c.report || c.aiBusy || !ai.key) return;
+  c.aiBusy = true; renderCheckAI();
+  try {
+    c.ai = await G.adviseOnPiece({
+      key: ai.key, model: ai.model || G.DEFAULT_MODEL,
+      piece: { name: c.name, url: c.url, price: c.product?.price || '', text: c.text },
+      report: c.report, closet: state.items, profile: S.getProfile(), images: c.shots.map(x => x.blob)
+    });
+  } catch (err) { toast(err.message || 'The second opinion failed.'); }
+  finally { c.aiBusy = false; renderCheckAI(); }
 }
 
 function wireChecker() {
@@ -1223,11 +1665,19 @@ function wireChecker() {
       case 'analyse': {
         currentChecker();
         if (!c.text.trim()) { toast('Paste the description, fabric and size chart first.'); return; }
-        c.report = runAnalysis(c);
+        c.report = runAnalysis(c); c.ai = null;
         renderReport();
         $('#check-report').scrollIntoView({ behavior: 'smooth', block: 'start' });
         break;
       }
+      case 'read-link': readLink(); break;
+      case 'read-shots': readShots(); break;
+      case 'ask-piece-ai': askPieceAI(); break;
+      case 'shot-del': {
+        const [x] = c.shots.splice(+b.dataset.i, 1); if (x) URL.revokeObjectURL(x.url);
+        currentChecker(); renderChecker(); break;
+      }
+      case 'check-new': resetChecker(); renderChecker(); window.scrollTo({ top: 0, behavior: 'smooth' }); break;
       case 'open-url': {
         currentChecker();
         try { const u = new URL(c.url); if (!/^https?:$/.test(u.protocol)) throw 0; window.open(u.href, '_blank', 'noopener'); }
@@ -1240,14 +1690,17 @@ function wireChecker() {
         S.saveCheck({
           id: c.activeId || S.newId('c'), url: c.url, name: c.name || (rep && TYPE_LABELS[rep.type]) || 'Saved piece', text: c.text,
           type: c.type, fit: c.fit, kind: c.kind, color: c.color, host: hostOf(c.url),
-          label: rep ? `${rep.verdict.label}${rep.size.ok ? ' · ' + rep.size.size : ''}` : '', savedAt: Date.now()
+          label: c.ai ? `${VERDICT_LABEL[c.ai.verdict]}${rep?.size.ok ? ' · ' + rep.size.size : ''}` : rep ? `${rep.verdict.label}${rep.size.ok ? ' · ' + rep.size.size : ''}` : '',
+          ai: c.ai || null, product: c.product || null, savedAt: Date.now()
         });
+        c.activeId = c.activeId || S.getChecks()[0]?.id;
         toast('Piece saved'); renderChecker();
         break;
       }
       case 'reopen-check': {
         const k = S.getChecks().find(x => x.id === b.dataset.id); if (!k) return;
-        Object.assign(c, { url: k.url, name: k.name, text: k.text, type: k.type, fit: k.fit, kind: k.kind, color: k.color, activeId: k.id });
+        resetChecker();
+        Object.assign(c, { url: k.url, name: k.name, text: k.text, type: k.type, fit: k.fit, kind: k.kind, color: k.color, activeId: k.id, ai: k.ai || null, product: k.product || null });
         c.report = runAnalysis(c); renderChecker(); window.scrollTo({ top: 0, behavior: 'smooth' });
         break;
       }
@@ -1266,7 +1719,9 @@ function wireChecker() {
       renderChecker();
     }
     if (['c-type', 'c-fit', 'c-kind'].includes(e.target.id)) currentChecker();
+    if (e.target.id === 'c-shots' && e.target.files?.length) addShots([...e.target.files]);
   });
+  v.addEventListener('toggle', e => { if (e.target.id === 'manual-fold') state.checker.openManual = e.target.open; }, true);
   v.addEventListener('input', e => { if (['c-url', 'c-name', 'c-text'].includes(e.target.id)) currentChecker(); });
 }
 
@@ -1300,7 +1755,7 @@ function renderProfile() {
   const r = E.idealRanges(p);
   const ai = S.getAISettings();
   v.innerHTML = `
-    <header class="page-head"><p class="eyebrow">My Profile</p><h1>Proportions</h1>
+    <header class="page-head"><p class="eyebrow">My Profile</p><h1><em>Proportions</em></h1>
     <p class="sub">Every size recommendation uses these numbers. Edit anytime — changes save automatically.</p></header>
 
     <section class="card">
@@ -1348,7 +1803,7 @@ function renderProfile() {
 
     <section class="card" id="ai-card">
       <h2 class="section-h">AI stylist <small>optional · Google Gemini</small></h2>
-      <p class="hint">Gemini looks at the photos in your outfit diary and tells you what works and what to change. Get a free key at
+      <p class="hint">Powers your Stylist chat, reads product links in the Checker, fills in new closet pieces from their photo, and gives feedback on your diary photos. Get a free key at
         <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> (“Create API key”), then paste it here.</p>
       ${ai.key ? `
         <p class="note">Key saved on this device ✓ · ends in ${esc(ai.key.slice(-4))}</p>
@@ -1362,7 +1817,7 @@ function renderProfile() {
           <input id="ai-model" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(G.DEFAULT_MODEL)}" value="${esc(ai.model)}"></label>
         <p class="hint">Leave blank to use ${esc(G.DEFAULT_MODEL)} (always Google’s latest Flash model).</p>
       </details>
-      <p class="hint">Your key stays only on this device and is not included in backups. When you ask for feedback, that photo and the outfit details are sent to Google. On the free tier Google may use them to improve its products.</p>
+      <p class="hint">Your key stays only on this device and is not included in backups. When you use an AI feature, what it needs is sent to Google — your closet list and profile for the Stylist, the link or screenshots for the Checker, and any photo you share. On the free tier Google may use them to improve its products.</p>
       <p class="hint" id="ai-status"></p>
     </section>
 
@@ -1429,7 +1884,7 @@ function wireProfile() {
       try {
         await G.testKey(key, model || G.DEFAULT_MODEL);
         S.saveAISettings({ key, model });
-        renderProfile(); toast('Gemini key saved');
+        renderProfile(); toast('Gemini key saved — your Stylist is ready ✦');
       } catch (err) { if (st) st.textContent = err.message || 'That key did not work.'; }
       return;
     }
@@ -1463,9 +1918,11 @@ function wireProfile() {
 
 async function boot() {
   refreshItems();
-  wireStudio(); wireCloset(); wireSheet(); wireWearSheet(); wireChecker(); wireProfile();
+  const dl = $('#dateline');
+  if (dl) dl.textContent = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  wireStudio(); wireCloset(); wireSheet(); wireWearSheet(); wireStylist(); wireChecker(); wireProfile();
   $$('#tabbar .tab').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
-  await S.preloadPhotos([...state.items.map(i => i.id), ...S.getWears().filter(w => w.hasPhoto).map(w => w.id)]);
+  await S.preloadPhotos([...state.items.map(i => i.id), ...S.getWears().filter(w => w.hasPhoto).map(w => w.id), ...S.getChat().filter(m => m.photo).map(m => m.id)]);
   let start = 'studio';
   try { start = sessionStorage.getItem('qc.tab') || 'studio'; } catch {}
   showTab(start);
