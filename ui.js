@@ -3,6 +3,7 @@
 
 import * as S from './wardrobeStore.js';
 import * as E from './stylistEngine.js';
+import * as G from './geminiStylist.js';
 
 /* ---------- tiny helpers ---------- */
 
@@ -34,7 +35,10 @@ const state = {
   closetFilter: 'all',
   studio: { core: new Set(), pickFilter: 'all', moodText: '', moodChips: [], finish: {}, result: null, openFinish: false },
   checker: { url: '', name: '', text: '', type: 'auto', fit: 'auto', kind: 'auto', color: null, report: null, activeId: null },
-  draft: null
+  draft: null,
+  wear: null,            // outfit-diary sheet draft
+  openWear: null,        // diary entry currently expanded
+  aiBusy: new Set()      // diary entries waiting on Gemini
 };
 
 function itemById(id) { return state.items.find(i => i.id === id); }
@@ -150,10 +154,12 @@ function renderStudio() {
 
     <div id="studio-results"></div>
     <div id="studio-saved"></div>
+    <div id="studio-diary"></div>
   `;
   renderPicker();
   renderResults();
   renderSavedLooks();
+  renderDiary();
 }
 
 function moodChipsHTML() {
@@ -202,6 +208,7 @@ function lookCard(look, idx, saved) {
     <dl class="notes">
       ${look.notes.map(n => `<div><dt>${esc(n.label)}</dt><dd>${esc(n.text)}</dd></div>`).join('')}
     </dl>
+    <button class="btn ghost wide" data-act="wore-look" data-look-id="${look.id}">I wore this · add a photo</button>
   </article>`;
 }
 
@@ -260,7 +267,8 @@ function generate(surprise = false) {
   if (!s.core.size) { toast('Pick a core piece, or tap Surprise Me.'); return; }
   const finish = {};
   FINISH_CATS.forEach(f => { finish[f.key] = s.finish[f.key] ? itemById(s.finish[f.key]) || null : null; });
-  s.result = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChips: moodPicks(), finish });
+  const history = E.learnFromWears(S.getWears(), all);
+  s.result = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChips: moodPicks(), finish, history });
   renderResults();
   $('#studio-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -324,6 +332,19 @@ function wireStudio() {
         renderResults(); renderSavedLooks();
         break;
       }
+      case 'wore-look': {
+        const id = b.dataset.lookId;
+        const look = s.result?.looks?.find(l => l.id === id) || S.getLooks().find(l => l.id === id);
+        if (look) openWearSheet({ look });
+        break;
+      }
+      case 'edit-wear': openWearSheet({ wearId: b.dataset.id }); break;
+      case 'ai-wear': askAIForEntry(b.dataset.id); break;
+      case 'del-wear': {
+        if (!confirm('Delete this outfit from your diary? The photo will be removed too.')) break;
+        S.deleteWear(b.dataset.id).then(() => { renderDiary(); toast('Removed from your diary'); });
+        break;
+      }
     }
   });
   v.addEventListener('input', e => {
@@ -336,7 +357,269 @@ function wireStudio() {
     const k = e.target.dataset?.finish;
     if (k) { state.studio.finish[k] = e.target.value; staleResult(); }
   });
-  v.addEventListener('toggle', e => { if (e.target.id === 'finish-fold') state.studio.openFinish = e.target.open; }, true);
+  v.addEventListener('toggle', e => {
+    if (e.target.id === 'finish-fold') state.studio.openFinish = e.target.open;
+    const wid = e.target.dataset?.wearId;
+    if (wid) { if (e.target.open) state.openWear = wid; else if (state.openWear === wid) state.openWear = null; }
+  }, true);
+}
+
+/* ======================================================================
+   OUTFIT DIARY — "I wore this": photo, how it felt, what you noticed, optional AI advice.
+   Every entry feeds E.learnFromWears, so the next looks are scored with it. The AI's private score is never shown.
+   ====================================================================== */
+
+const WEAR_PHOTO_W = 1024;   // larger than closet photos so the AI can see fit and proportion
+const feelLabel = id => E.WEAR_FEELS.find(f => f.id === id)?.label || '';
+const dateInput = ts => { const d = new Date(ts); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+const niceDate = ts => new Date(ts).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+
+function wearPic(w, cls = '') {
+  const u = w.hasPhoto ? S.photoURLSync(w.id) : '';
+  return u ? `<img class="${cls}" src="${u}" alt="Outfit worn ${esc(niceDate(w.wornAt))}" decoding="async">` : '';
+}
+
+function aiAdviceHTML(ai) {
+  if (!ai) return '';
+  return `<div class="ai-advice">
+    <p class="eyebrow">AI stylist</p>
+    ${ai.summary ? `<p class="verdict-line">${esc(ai.summary)}</p>` : ''}
+    ${ai.works?.length ? `<h5>What works</h5><ul class="bullets">${ai.works.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+    ${ai.change?.length ? `<h5>Try next time</h5><ul class="bullets">${ai.change.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+function renderDiary() {
+  const box = $('#studio-diary');
+  if (!box) return;
+  const wears = S.getWears();
+  if (!wears.length) { box.innerHTML = ''; return; }
+  const hasKey = !!S.getAISettings().key;
+  box.innerHTML = `
+    <h2 class="section-title">Outfit diary <span>${wears.length}</span></h2>
+    <p class="hint">Every outfit you log teaches the stylist what works on you.</p>
+    ${wears.map(w => {
+      const pieces = (w.itemIds || w.pieceIds || []).map(itemById).filter(Boolean);
+      const busy = state.aiBusy.has(w.id);
+      const aiBtn = !w.hasPhoto ? '' : !hasKey
+        ? `<p class="hint">Add your Gemini key in Profile to get AI feedback on this photo.</p>`
+        : `<button class="btn ghost wide" data-act="ai-wear" data-id="${w.id}" ${busy ? 'disabled' : ''}>${busy ? 'Looking at your photo…' : w.ai ? '↻ Ask the AI again' : '✦ Get AI feedback'}</button>`;
+      return `
+      <details class="card saved wear" data-wear-id="${w.id}" ${state.openWear === w.id ? 'open' : ''}>
+        <summary>
+          <div class="wear-thumb">${wearPic(w) || `<div class="mini">${pieces.slice(0, 3).map(i => `<span>${pic(i)}</span>`).join('')}</div>`}</div>
+          <div class="grow"><strong>${esc(w.title || 'Outfit')}</strong><small>${esc(niceDate(w.wornAt))}${w.feel ? ' · ' + esc(feelLabel(w.feel)) : ''}</small></div>
+        </summary>
+        <div class="wear-body">
+          ${w.hasPhoto ? `<div class="wear-photo">${wearPic(w)}</div>` : ''}
+          ${pieces.length ? `<p class="legend">${pieces.map(p => `<span><i style="background:${esc(p.color?.hex)}"></i>${esc(p.name)}</span>`).join('')}</p>` : ''}
+          ${w.tags?.length ? `<div class="chips static">${w.tags.map(t => `<span class="chip ${E.WEAR_TAGS.good.includes(t) ? 'gold' : ''}">${esc(t)}</span>`).join('')}</div>` : ''}
+          ${w.notes ? `<p class="note">${esc(w.notes)}</p>` : ''}
+          ${aiAdviceHTML(w.ai)}
+          ${aiBtn}
+          <div class="row gap pad-top">
+            <button class="btn ghost grow" data-act="edit-wear" data-id="${w.id}">Edit</button>
+            <button class="btn danger" data-act="del-wear" data-id="${w.id}">Delete</button>
+          </div>
+        </div>
+      </details>`;
+    }).join('')}`;
+}
+
+function openWearSheet({ look, wearId }) {
+  const ex = wearId ? S.getWears().find(w => w.id === wearId) : null;
+  if (wearId && !ex) return;
+  state.wear = ex
+    ? { ...structuredClone(ex), isNew: false, blob: null, previewUrl: ex.hasPhoto ? S.photoURLSync(ex.id) : '', ownUrl: false, busy: false }
+    : {
+        id: S.newId('w'), isNew: true, lookId: look.id, title: look.title, mood: look.mood,
+        pieceIds: [...(look.pieceIds?.length ? look.pieceIds : look.itemIds)], itemIds: [...look.itemIds],
+        feel: '', tags: [], notes: '', ai: null, wornAt: Date.now(), hasPhoto: false,
+        blob: null, previewUrl: '', ownUrl: false, busy: false
+      };
+  renderWearSheet();
+}
+
+function closeWearSheet() {
+  const w = state.wear;
+  if (w?.ownUrl && w.previewUrl) URL.revokeObjectURL(w.previewUrl);
+  state.wear = null;
+  $('#sheet-root').innerHTML = '';
+  document.body.classList.remove('locked');
+}
+
+function wChips(name, options, value, multi) {
+  return `<div class="chips">${options.map(o => {
+    const id = typeof o === 'string' ? o : o.id, label = typeof o === 'string' ? o : o.label;
+    const on = multi ? value.includes(id) : value === id;
+    return `<button type="button" class="chip ${on ? 'on' : ''}" data-wchip="${name}" data-v="${esc(id)}" aria-pressed="${on}">${esc(label)}</button>`;
+  }).join('')}</div>`;
+}
+
+const WSEC = {
+  photo: w => `
+    <label class="upload tall ${w.previewUrl ? 'has' : ''}">
+      ${w.previewUrl ? `<img src="${w.previewUrl}" alt="Your outfit">` : `<span class="plus">+</span><span>Add a photo of you wearing it</span>`}
+      <input type="file" accept="image/*" id="wear-photo" hidden>
+      ${w.previewUrl ? `<span class="change">Change photo</span>` : ''}
+    </label>
+    <p class="hint center">A full-length mirror photo works best.</p>`,
+  feel: w => `<span>How did it feel?</span>${wChips('feel', E.WEAR_FEELS, w.feel, false)}`,
+  tags: w => `<span>What did you notice? <small>pick any</small></span>
+    <p class="hint">Worked</p>${wChips('tag', E.WEAR_TAGS.good, w.tags, true)}
+    <p class="hint">Didn’t work</p>${wChips('tag', E.WEAR_TAGS.bad, w.tags, true)}`,
+  ai: w => {
+    const hasKey = !!S.getAISettings().key;
+    let btn;
+    if (!w.previewUrl) btn = `<p class="hint">Add a photo to get feedback from your AI stylist.</p>`;
+    else if (!hasKey) btn = `<p class="hint">Add your Gemini key in Profile to get AI feedback on this photo.</p>`;
+    else btn = `<button type="button" class="btn ghost wide" data-wear="ai" ${w.busy ? 'disabled' : ''}>${w.busy ? 'Looking at your photo…' : w.ai ? '↻ Ask the AI again' : '✦ Get AI feedback'}</button>`;
+    return aiAdviceHTML(w.ai) + btn;
+  }
+};
+
+function refreshWear(...keys) {
+  const w = state.wear; if (!w) return;
+  keys.forEach(k => { const el = $('#wsec-' + k); if (el) el.innerHTML = WSEC[k](w); });
+}
+
+function renderWearSheet() {
+  const w = state.wear; if (!w) return;
+  document.body.classList.add('locked');
+  const sec = (k, cls = 'field') => `<div class="${cls}" id="wsec-${k}">${WSEC[k](w)}</div>`;
+  $('#sheet-root').innerHTML = `
+  <div class="backdrop" data-wear="close"></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="I wore this">
+    <header class="sheet-head">
+      <button class="link" data-wear="close">Cancel</button>
+      <h2>${w.isNew ? 'I wore this' : 'Edit diary entry'}</h2>
+      <button class="link strong" data-wear="save">Save</button>
+    </header>
+    <div class="sheet-body">
+      <p class="eyebrow">${esc(w.title || 'Outfit')}${w.mood ? ' · ' + esc(w.mood) : ''}</p>
+      ${sec('photo', 'plain')}
+      <label class="field"><span>Worn on</span><input id="w-date" type="date" value="${dateInput(w.wornAt)}" max="${dateInput(Date.now())}"></label>
+      ${sec('feel')}
+      ${sec('tags')}
+      <label class="field"><span>Notes <small>optional</small></span><textarea id="w-notes" rows="2" placeholder="e.g. sleeves kept slipping, got compliments">${esc(w.notes)}</textarea></label>
+      ${sec('ai')}
+      ${w.isNew ? '' : `<button class="btn danger wide" data-wear="delete">Delete this entry</button>`}
+    </div>
+  </div>`;
+}
+
+async function handleWearPhoto(file) {
+  const w = state.wear; if (!w || !file) return;
+  try {
+    const { blob } = await S.processPhoto(file, WEAR_PHOTO_W);
+    if (state.wear !== w) return;
+    if (w.ownUrl && w.previewUrl) URL.revokeObjectURL(w.previewUrl);
+    w.blob = blob; w.previewUrl = URL.createObjectURL(blob); w.ownUrl = true;
+    w.ai = null;                       // advice was about the previous photo
+    refreshWear('photo', 'ai');
+  } catch (err) { toast(err.message || 'Could not read that photo.'); }
+}
+
+function wearPayload(w) {
+  return {
+    id: w.id, lookId: w.lookId, title: w.title, mood: w.mood, pieceIds: w.pieceIds, itemIds: w.itemIds,
+    feel: w.feel, tags: w.tags, notes: (w.notes || '').trim(), ai: w.ai || null,
+    wornAt: w.wornAt, hasPhoto: !!(w.hasPhoto || w.blob), createdAt: w.createdAt || Date.now()
+  };
+}
+
+async function saveWearDraft() {
+  const w = state.wear; if (!w) return;
+  if (!w.previewUrl && !w.feel && !w.tags.length) { toast('Add a photo or tell me how it felt.'); return; }
+  const rec = wearPayload(w);
+  try {
+    if (w.blob) { await S.putPhoto(rec.id, w.blob); S.revokePhotoURL(rec.id); await S.getPhotoURL(rec.id); }
+  } catch { toast('Could not store the photo — storage may be full.'); return; }
+  if (!S.saveWear(rec)) { toast('Could not save — storage may be full.'); return; }
+  const wasNew = w.isNew;
+  closeWearSheet();
+  S.requestPersistence();
+  state.openWear = rec.id;
+  renderDiary();
+  toast(wasNew ? 'Added to your outfit diary' : 'Saved');
+  if (wasNew) $('#studio-diary')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function deleteWearDraft() {
+  const w = state.wear; if (!w || w.isNew) return;
+  if (!confirm('Delete this outfit from your diary? The photo will be removed too.')) return;
+  await S.deleteWear(w.id);
+  closeWearSheet(); renderDiary(); toast('Removed from your diary');
+}
+
+/** Everything Gemini needs about a wear, apart from the photo. */
+function aiContext(w) {
+  const ai = S.getAISettings();
+  return {
+    key: ai.key, model: ai.model || G.DEFAULT_MODEL,
+    pieces: (w.itemIds || w.pieceIds || []).map(itemById).filter(Boolean),
+    mood: w.mood, profile: S.getProfile(), closet: state.items.filter(i => CLOTHING_CATS.includes(i.category)),
+    feel: feelLabel(w.feel), tags: w.tags || [], notes: w.notes || ''
+  };
+}
+
+/** AI from inside the sheet: result stays in the draft until Save. */
+async function askAIInSheet() {
+  const w = state.wear; if (!w || w.busy) return;
+  const photo = w.blob || (w.hasPhoto ? await S.getPhoto(w.id) : null);
+  if (!photo) { toast('Add a photo first.'); return; }
+  w.busy = true; refreshWear('ai');
+  try {
+    const res = await G.reviewOutfit({ ...aiContext(w), photo });
+    if (state.wear !== w) return;
+    w.ai = res;
+    toast('Advice ready — tap Save to keep it');
+  } catch (err) { toast(err.message || 'AI feedback failed.'); }
+  finally { w.busy = false; if (state.wear === w) refreshWear('ai'); }
+}
+
+/** AI from a saved diary entry: result is saved straight away. */
+async function askAIForEntry(id) {
+  if (state.aiBusy.has(id)) return;
+  const w = S.getWears().find(x => x.id === id); if (!w) return;
+  const photo = w.hasPhoto ? await S.getPhoto(id) : null;
+  if (!photo) { toast('This entry has no photo.'); return; }
+  state.aiBusy.add(id); state.openWear = id; renderDiary();
+  try {
+    const res = await G.reviewOutfit({ ...aiContext(w), photo });
+    const cur = S.getWears().find(x => x.id === id);
+    if (cur) { cur.ai = res; S.saveWear(cur); }
+    toast('Advice ready');
+  } catch (err) { toast(err.message || 'AI feedback failed.'); }
+  finally { state.aiBusy.delete(id); renderDiary(); }
+}
+
+function wireWearSheet() {
+  const root = $('#sheet-root');
+  root.addEventListener('click', e => {
+    const w = state.wear; if (!w) return;
+    const a = e.target.closest('[data-wear]')?.dataset.wear;
+    if (a) {
+      if (a === 'close') closeWearSheet();
+      if (a === 'save') saveWearDraft();
+      if (a === 'delete') deleteWearDraft();
+      if (a === 'ai') askAIInSheet();
+      return;
+    }
+    const chip = e.target.closest('[data-wchip]'); if (!chip) return;
+    const v = chip.dataset.v;
+    if (chip.dataset.wchip === 'feel') { w.feel = w.feel === v ? '' : v; refreshWear('feel'); }
+    else { w.tags = w.tags.includes(v) ? w.tags.filter(t => t !== v) : [...w.tags, v]; refreshWear('tags'); }
+  });
+  root.addEventListener('input', e => { if (state.wear && e.target.id === 'w-notes') state.wear.notes = e.target.value; });
+  root.addEventListener('change', e => {
+    const w = state.wear; if (!w) return;
+    if (e.target.id === 'wear-photo') handleWearPhoto(e.target.files?.[0]);
+    if (e.target.id === 'w-date' && e.target.value) {
+      const t = new Date(e.target.value + 'T12:00').getTime();
+      if (Number.isFinite(t)) w.wornAt = Math.min(t, Date.now());
+    }
+  });
 }
 
 /* ======================================================================
@@ -1015,6 +1298,7 @@ function renderProfile() {
   const p = S.getProfile();
   const sum = proportionSummary(p);
   const r = E.idealRanges(p);
+  const ai = S.getAISettings();
   v.innerHTML = `
     <header class="page-head"><p class="eyebrow">My Profile</p><h1>Proportions</h1>
     <p class="sub">Every size recommendation uses these numbers. Edit anytime — changes save automatically.</p></header>
@@ -1062,6 +1346,26 @@ function renderProfile() {
       <p class="hint">Garment measurements in cm, flat-doubled (full circumference).</p>
     </section>
 
+    <section class="card" id="ai-card">
+      <h2 class="section-h">AI stylist <small>optional · Google Gemini</small></h2>
+      <p class="hint">Gemini looks at the photos in your outfit diary and tells you what works and what to change. Get a free key at
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> (“Create API key”), then paste it here.</p>
+      ${ai.key ? `
+        <p class="note">Key saved on this device ✓ · ends in ${esc(ai.key.slice(-4))}</p>
+        <button class="btn ghost wide" data-act="ai-remove">Remove key</button>` : `
+        <label class="field"><span>Gemini API key</span>
+          <input id="ai-key" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste your key"></label>
+        <button class="btn primary wide" data-act="ai-save">Save key</button>`}
+      <details class="fold sub-fold">
+        <summary>Model</summary>
+        <label class="field"><span>Gemini model</span>
+          <input id="ai-model" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(G.DEFAULT_MODEL)}" value="${esc(ai.model)}"></label>
+        <p class="hint">Leave blank to use ${esc(G.DEFAULT_MODEL)} (always Google’s latest Flash model).</p>
+      </details>
+      <p class="hint">Your key stays only on this device and is not included in backups. When you ask for feedback, that photo and the outfit details are sent to Google. On the free tier Google may use them to improve its products.</p>
+      <p class="hint" id="ai-status"></p>
+    </section>
+
     <section class="card">
       <h2 class="section-h">Backup &amp; export</h2>
       <p class="hint">Your photos live only on this device. Save a backup file regularly — to iCloud Drive or Files — so you can restore them on a new phone or if Safari clears its data.</p>
@@ -1103,6 +1407,10 @@ function wireProfile() {
       } catch (err) { if (st) st.textContent = err.message || 'Restore failed.'; }
       return;
     }
+    if (e.target.id === 'ai-model') {
+      S.saveAISettings({ ...S.getAISettings(), model: e.target.value.trim() });
+      toast('Model saved'); return;
+    }
     const k = e.target.dataset?.p; if (!k) return;
     const p = S.getProfile();
     const val = e.target.type === 'number' ? parseFloat(e.target.value) : e.target.value;
@@ -1113,6 +1421,23 @@ function wireProfile() {
   });
   v.addEventListener('click', async e => {
     const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'ai-save') {
+      const key = ($('#ai-key')?.value || '').trim();
+      if (!key) { toast('Paste your Gemini key first.'); return; }
+      const st = $('#ai-status'); if (st) st.textContent = 'Checking the key with Google…';
+      const model = $('#ai-model')?.value.trim() || S.getAISettings().model || '';
+      try {
+        await G.testKey(key, model || G.DEFAULT_MODEL);
+        S.saveAISettings({ key, model });
+        renderProfile(); toast('Gemini key saved');
+      } catch (err) { if (st) st.textContent = err.message || 'That key did not work.'; }
+      return;
+    }
+    if (act === 'ai-remove') {
+      if (!confirm('Remove your Gemini key from this device?')) return;
+      S.clearAISettings(); renderProfile(); toast('Key removed');
+      return;
+    }
     if (act === 'export-backup' || act === 'export-csv') {
       const st = $('#backup-status');
       try {
@@ -1138,9 +1463,9 @@ function wireProfile() {
 
 async function boot() {
   refreshItems();
-  wireStudio(); wireCloset(); wireSheet(); wireChecker(); wireProfile();
+  wireStudio(); wireCloset(); wireSheet(); wireWearSheet(); wireChecker(); wireProfile();
   $$('#tabbar .tab').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
-  await S.preloadPhotos(state.items.map(i => i.id));
+  await S.preloadPhotos([...state.items.map(i => i.id), ...S.getWears().filter(w => w.hasPhoto).map(w => w.id)]);
   let start = 'studio';
   try { start = sessionStorage.getItem('qc.tab') || 'studio'; } catch {}
   showTab(start);

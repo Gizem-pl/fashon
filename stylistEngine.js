@@ -416,8 +416,87 @@ function sheenScore(a, b) {
 }
 
 function pairScore(a, b, mood, intent) {
-  return contrastScore(a, b, intent) + harmony(a.color?.hex, b.color?.hex) + vibeScore(b, mood) + sheenScore(a, b);
+  return contrastScore(a, b, intent) + harmony(a.color?.hex, b.color?.hex) + vibeScore(b, mood) + sheenScore(a, b) + learnedPair(a, b);
 }
+
+/* ---------- Learning from the outfit diary ----------
+   Each logged wear (how it felt, what was noticed, optional AI review) nudges future scoring:
+   the exact pieces worn together, the silhouette combination, the colour pairing and each piece on its own.
+   The user's own verdict always weighs more than the AI's. */
+
+export const WEAR_FEELS = [
+  { id: 'love', label: 'Loved it',    w: 1.6 },
+  { id: 'fine', label: 'It was fine', w: 0.3 },
+  { id: 'no',   label: 'Not for me',  w: -1.6 }
+];
+export const WEAR_TAGS = {
+  good: ['Great proportions', 'Flattering fit', 'Colours work', 'Felt confident', 'Comfortable', 'Right for the occasion'],
+  bad:  ['Too boxy', 'Too much volume', 'Too tight', 'Colours clash', 'Too many colours', 'Too warm', 'Too cold', 'Too casual', 'Too dressy', 'Uncomfortable']
+};
+const GOOD_TAGS = new Set(WEAR_TAGS.good), BAD_TAGS = new Set(WEAR_TAGS.bad);
+const SHAPE_TAGS = new Set(['Great proportions', 'Flattering fit', 'Too boxy', 'Too much volume', 'Too tight']);
+const COLOUR_TAGS = new Set(['Colours work', 'Colours clash', 'Too many colours']);
+const tagWeight = t => GOOD_TAGS.has(t) ? 0.5 : BAD_TAGS.has(t) ? -0.6 : 0;
+const pairKey = (a, b) => a < b ? a + '|' + b : b + '|' + a;
+const clampAbs = (v, m) => Math.max(-m, Math.min(m, v));
+const slotOf = i => categoryById(i?.category)?.slot;
+const RECENT_MS = 5 * 864e5;
+
+/** Turn the outfit diary into a scoring model. wears: diary records; items: the closet. */
+export function learnFromWears(wears = [], items = []) {
+  const byId = new Map(items.map(i => [i.id, i]));
+  const m = { pair: new Map(), item: new Map(), shape: new Map(), colour: new Map(), recent: new Set(), wears: [] };
+  const add = (map, k, v) => map.set(k, (map.get(k) || 0) + v);
+  const now = Date.now();
+  for (const w of wears) {
+    const pieces = (w.pieceIds || []).map(id => byId.get(id)).filter(Boolean);
+    if (!pieces.length) continue;
+    const userTags = w.tags || [], aiTags = w.ai?.tags || [];
+    const aiScore = typeof w.ai?.score === 'number' ? (w.ai.score - 5.5) / 4.5 : 0;       // roughly −1…+1, never shown
+    const overall = (WEAR_FEELS.find(f => f.id === w.feel)?.w || 0)
+      + userTags.reduce((s, t) => s + tagWeight(t), 0)
+      + 0.5 * (aiScore + aiTags.reduce((s, t) => s + tagWeight(t), 0));
+    const focused = set => userTags.filter(t => set.has(t)).reduce((s, t) => s + tagWeight(t), 0)
+      + 0.5 * aiTags.filter(t => set.has(t)).reduce((s, t) => s + tagWeight(t), 0);
+    const recent = now - (w.wornAt || 0) < RECENT_MS;
+
+    for (let i = 0; i < pieces.length; i++) {
+      add(m.item, pieces[i].id, overall / pieces.length);
+      for (let j = i + 1; j < pieces.length; j++) {
+        const k = pairKey(pieces[i].id, pieces[j].id);
+        add(m.pair, k, overall);
+        if (recent) m.recent.add(k);
+      }
+    }
+    const tops = pieces.filter(p => slotOf(p) === 'top'), top = tops[tops.length - 1], bottom = pieces.find(p => slotOf(p) === 'bottom');
+    const shapeW = focused(SHAPE_TAGS);
+    if (shapeW && top?.silhouette && bottom?.silhouette) add(m.shape, `${top.silhouette}|${bottom.silhouette}`, shapeW);
+    const colourW = focused(COLOUR_TAGS);
+    if (colourW) {
+      const names = [...new Set(pieces.filter(p => CLOTHING_SLOTS.has(slotOf(p))).map(p => lc(p.color?.name)).filter(Boolean))];
+      for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) add(m.colour, pairKey(names[i], names[j]), colourW);
+    }
+    m.wears.push({ w, pieces, overall });
+  }
+  m.wears.sort((a, b) => (b.w.wornAt || 0) - (a.w.wornAt || 0));
+  return m;
+}
+
+let LEARN = null;   // set for the duration of buildLooks
+
+function learnedPair(a, b) {
+  if (!LEARN || !a || !b) return 0;
+  const k = pairKey(a.id, b.id);
+  let s = clampAbs(LEARN.pair.get(k) || 0, 4);
+  if (LEARN.recent.has(k)) s -= 1.2;                                       // worn together a few days ago: vary it
+  const top = slotOf(a) === 'top' ? a : slotOf(b) === 'top' ? b : null;
+  const bottom = slotOf(a) === 'bottom' ? a : slotOf(b) === 'bottom' ? b : null;
+  if (top && bottom) s += clampAbs(LEARN.shape.get(`${top.silhouette}|${bottom.silhouette}`) || 0, 3);
+  const ca = lc(a.color?.name), cb = lc(b.color?.name);
+  if (ca && cb && ca !== cb) s += clampAbs(LEARN.colour.get(pairKey(ca, cb)) || 0, 3);
+  return s;
+}
+function learnedItem(c) { return LEARN && c ? clampAbs(LEARN.item.get(c.id) || 0, 2) : 0; }
 
 /* ---------- Look building ---------- */
 
@@ -444,7 +523,7 @@ function outfitPieces(o) {
 function pickBest(cands, scoreFn, avoid, jitter = 0.5) {
   let best = null, bs = -Infinity;
   for (const c of cands) {
-    let s = scoreFn(c) + Math.random() * jitter;
+    let s = scoreFn(c) + learnedItem(c) + Math.random() * jitter;
     if (avoid.has(c.id)) s -= 6;
     if (s > bs) { bs = s; best = c; }
   }
@@ -522,7 +601,7 @@ function completeOutfit(core, items, mood, intent, avoid) {
     if (o.outer && outerLayerPenalty(under, o.outer) <= -8) o.outer = null;   // would not sit over what is underneath: skip it
   }
   if (!o.shoes && pool('shoes').length && base) {
-    o.shoes = pickBest(pool('shoes'), s => harmony(s.color?.hex, anchor.color?.hex) + (intent === 'classic' && s.contrast === 'Dark' ? 1 : 0) + vibeScore(s, mood), avoid, 0.7);
+    o.shoes = pickBest(pool('shoes'), s => harmony(s.color?.hex, anchor.color?.hex) + (intent === 'classic' && s.contrast === 'Dark' ? 1 : 0) + vibeScore(s, mood) + learnedPair(s, anchor), avoid, 0.7);
   }
   // order two tops so the base layer comes first and the outer layer second
   if (o.top.length === 2) { const lp = layerPair(o.top[0], o.top[1]); o.top = [lp.inner, lp.outer]; }
@@ -651,10 +730,37 @@ function makeupNote(finish, mood) {
   return `${mood.makeup.charAt(0).toUpperCase() + mood.makeup.slice(1)}.`;
 }
 
+function agoText(ts) {
+  const d = Math.floor((Date.now() - (ts || 0)) / 864e5);
+  if (d <= 0) return 'today';
+  if (d === 1) return 'yesterday';
+  if (d < 7) return `${d} days ago`;
+  if (d < 30) { const wk = Math.round(d / 7); return `${wk} week${wk > 1 ? 's' : ''} ago`; }
+  return 'on ' + new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+function listText(names) { return names.length <= 1 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1]; }
+
+/** Recall the most recent diary entry that shares at least two pieces with this look. */
+function diaryNote(pieces) {
+  if (!LEARN?.wears.length) return '';
+  const ids = new Set(pieces.map(p => p.id));
+  const hit = LEARN.wears.find(x => x.pieces.filter(p => ids.has(p.id)).length >= 2);
+  if (!hit) return '';
+  const shared = hit.pieces.filter(p => ids.has(p.id)).map(nm);
+  const feel = { love: 'you loved it', fine: 'it felt fine', no: 'it did not feel right' }[hit.w.feel] || '';
+  const tags = (hit.w.tags || []).slice(0, 2).map(lc);
+  let t = `You wore the ${listText(shared)} together ${agoText(hit.w.wornAt)}${feel ? ` and ${feel}` : ''}${tags.length ? ` (${tags.join(', ')})` : ''}.`;
+  const tip = hit.w.ai?.change?.[0];
+  if (tip && hit.overall < 1.5) t += ` Advice from that day: ${tip}`;
+  else if (hit.overall >= 1.5) t += ' A proven pairing for you.';
+  return t;
+}
+
 function buildLookObject(title, tagline, outfit, finish, mood, intent) {
   const pieces = outfitPieces(outfit);
   const accessories = ['legwear', 'belt', 'jewelry', 'hair', 'nails', 'makeup', 'perfume'].map(k => finish[k]).filter(Boolean);
   const notes = [
+    { label: 'From your outfit diary', text: diaryNote(pieces) },
     { label: 'Proportion & tuck', text: proportionNote(outfit, intent) },
     { label: 'Colour balance',    text: contrastNote(outfit) },
     { label: 'Fabric & texture',  text: fabricNote(outfit) },
@@ -681,7 +787,8 @@ function buildLookObject(title, tagline, outfit, finish, mood, intent) {
  * Build exactly two looks.
  * items: all closet items. coreIds: >=1 chosen item ids. finish: { belt, jewelry, hair, nails, makeup, perfume } (items or null).
  */
-export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {} }) {
+export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {}, history = null }) {
+  LEARN = history;
   const core = coreIds.map(id => items.find(i => i.id === id)).filter(Boolean);
   if (!core.length) return { error: 'Pick at least one core piece from your closet, or tap Surprise Me.' };
   const mood = interpretMood(moodText, moodChips || moodChip);

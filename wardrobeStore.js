@@ -1,6 +1,7 @@
 /* wardrobeStore.js — persistence + image processing.
    - IndexedDB: compressed photo blobs (one per item id)
-   - localStorage: item metadata, profile, saved looks, saved link checks
+   - IndexedDB also holds outfit-diary photos (one per wear id)
+   - localStorage: item metadata, profile, saved looks, saved link checks, outfit diary, AI settings
    No DOM rendering and no styling logic lives here. */
 
 import { DEFAULT_PROFILE, contrastFromHex, colorName, rgbToHex, rgbToHsl } from './stylistEngine.js';
@@ -10,7 +11,9 @@ const LS = {
   profile: 'qc.profile.v1',
   looks: 'qc.looks.v1',
   checks: 'qc.checks.v1',
-  moods: 'qc.moods.v1'
+  moods: 'qc.moods.v1',
+  wears: 'qc.wears.v1',
+  ai: 'qc.ai.v1'
 };
 const DB_NAME = 'quiet-closet';
 const DB_VERSION = 1;
@@ -72,6 +75,27 @@ export function saveCustomMood(m) {
   return write(LS.moods, list);
 }
 export function removeCustomMood(id) { write(LS.moods, getCustomMoods().filter(m => m.id !== id)); }
+
+/* ---------- Outfit diary: { id, lookId, title, mood, pieceIds, itemIds, feel, tags, notes, ai, wornAt, hasPhoto } ----------
+   The wear photo is stored in IndexedDB under the wear's own id. */
+
+export function getWears() { return read(LS.wears, []).sort((a, b) => (b.wornAt || 0) - (a.wornAt || 0)); }
+export function saveWear(w) {
+  const list = getWears().filter(x => x.id !== w.id);
+  list.push(w);
+  return write(LS.wears, list);
+}
+export async function deleteWear(id) {
+  write(LS.wears, getWears().filter(w => w.id !== id));
+  revokePhotoURL(id);
+  try { await deletePhoto(id); } catch (e) { console.warn(e); }
+}
+
+/* ---------- AI stylist settings: { key, model }. Stays on this device and is never put in a backup. ---------- */
+
+export function getAISettings() { return { key: '', model: '', ...read(LS.ai, {}) }; }
+export function saveAISettings(s) { return write(LS.ai, s); }
+export function clearAISettings() { try { localStorage.removeItem(LS.ai); } catch {} }
 
 /* ---------- Saved link checks ---------- */
 
@@ -157,13 +181,13 @@ function loadImage(file) {
  * Resize to max 600px wide (JPEG 0.8) and extract dominant colour + contrast.
  * Returns { blob, color: {hex, name}, contrast }.
  */
-export async function processPhoto(file) {
+export async function processPhoto(file, maxW = MAX_W) {
   let source = null;
   // createImageBitmap honours EXIF orientation on modern Safari; fall back to <img>.
   try { if (window.createImageBitmap) source = await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch { source = null; }
   if (!source) source = await loadImage(file);
   const sw = source.width || source.naturalWidth, sh = source.height || source.naturalHeight;
-  const scale = Math.min(1, MAX_W / sw);
+  const scale = Math.min(1, maxW / sw);
   const w = Math.max(1, Math.round(sw * scale)), h = Math.max(1, Math.round(sh * scale));
 
   const canvas = document.createElement('canvas');
@@ -260,7 +284,12 @@ export async function createBackup() {
   for (const it of items) {
     try { const b = await getPhoto(it.id); if (b) photos[it.id] = await blobToDataURL(b); } catch (e) { console.warn('photo skipped', it.id, e); }
   }
-  const data = { app: 'quiet-closet', version: BACKUP_VERSION, exportedAt: new Date().toISOString(), items, profile: read(LS.profile, {}), looks: getLooks(), checks: getChecks(), moods: getCustomMoods(), photos };
+  const wears = getWears();
+  for (const w of wears) {
+    if (!w.hasPhoto) continue;
+    try { const b = await getPhoto(w.id); if (b) photos[w.id] = await blobToDataURL(b); } catch (e) { console.warn('wear photo skipped', w.id, e); }
+  }
+  const data = { app: 'quiet-closet', version: BACKUP_VERSION, exportedAt: new Date().toISOString(), items, profile: read(LS.profile, {}), looks: getLooks(), checks: getChecks(), moods: getCustomMoods(), wears, photos };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   return { blob, filename: `quiet-closet-backup-${new Date().toISOString().slice(0, 10)}.json`, count: items.length };
 }
@@ -280,8 +309,8 @@ export async function restoreBackup(file, mode = 'merge') {
   if (data?.app !== 'quiet-closet' || !Array.isArray(data.items)) throw new Error('That does not look like a Fashon backup.');
 
   if (mode === 'replace') {
-    for (const it of getItems()) { revokePhotoURL(it.id); try { await deletePhoto(it.id); } catch {} }
-    write(LS.items, []); write(LS.looks, []); write(LS.checks, []);
+    for (const it of [...getItems(), ...getWears()]) { revokePhotoURL(it.id); try { await deletePhoto(it.id); } catch {} }
+    write(LS.items, []); write(LS.looks, []); write(LS.checks, []); write(LS.wears, []);
   }
   const byId = new Map(getItems().map(i => [i.id, i]));
   let photosRestored = 0;
@@ -291,12 +320,17 @@ export async function restoreBackup(file, mode = 'merge') {
     byId.set(it.id, it);
   }
   write(LS.items, [...byId.values()]);
+  const knownWears = new Set(getWears().map(w => w.id));
+  for (const w of data.wears || []) {
+    const url = data.photos?.[w.id];
+    if (url && !knownWears.has(w.id)) { await putPhoto(w.id, await dataURLToBlob(url)); revokePhotoURL(w.id); }
+  }
   const mergeList = (key, incoming) => {
     const cur = read(key, []); const ids = new Set(cur.map(x => x.id));
     write(key, [...cur, ...(incoming || []).filter(x => !ids.has(x.id))]);
   };
-  mergeList(LS.looks, data.looks); mergeList(LS.checks, data.checks); mergeList(LS.moods, data.moods);
+  mergeList(LS.looks, data.looks); mergeList(LS.checks, data.checks); mergeList(LS.moods, data.moods); mergeList(LS.wears, data.wears);
   if (data.profile && Object.keys(data.profile).length && (mode === 'replace' || !Object.keys(read(LS.profile, {})).length)) write(LS.profile, data.profile);
-  await preloadPhotos(data.items.map(i => i.id));
+  await preloadPhotos([...data.items.map(i => i.id), ...(data.wears || []).filter(w => w.hasPhoto).map(w => w.id)]);
   return { items: data.items.length, photos: photosRestored };
 }

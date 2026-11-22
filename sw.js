@@ -1,6 +1,6 @@
 /* Offline shell: cache-first for app files, network-refresh in the background. Photos live in IndexedDB, not here. */
-const CACHE = 'fashon-v5';
-const ASSETS = ['./', './index.html', './style.css', './ui.js', './wardrobeStore.js', './stylistEngine.js',
+const CACHE = 'fashon-v6';
+const ASSETS = ['./', './index.html', './style.css', './ui.js', './wardrobeStore.js', './stylistEngine.js', './geminiStylist.js',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
