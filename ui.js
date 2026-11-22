@@ -37,7 +37,7 @@ const state = {
             seg: 'create', collapsed: false, addingMood: false },
   checker: { url: '', name: '', text: '', type: 'auto', fit: 'auto', kind: 'auto', color: null, report: null, activeId: null,
              product: null, shots: [], reading: false, ai: null, aiBusy: false, openManual: false },
-  chat: { text: '', photo: null, photoUrl: '', busy: false },
+  chat: { text: '', photo: null, photoUrl: '', busy: false, ctrl: null },
   draft: null,
   wear: null,            // outfit-diary sheet draft
   openWear: null,        // diary entry currently expanded
@@ -1246,7 +1246,9 @@ function renderStylist() {
       <div class="composer-row">
         <label class="icon-btn" aria-label="Attach a photo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.8l1.4-2h4.6l1.4 2h1.8A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.3" r="3.4"/></svg><input type="file" accept="image/*" id="chat-photo" hidden></label>
         <textarea id="chat-input" rows="1" placeholder="Ask your stylist…" enterkeyhint="send">${esc(c.text)}</textarea>
-        <button type="submit" class="send" aria-label="Send" ${c.busy ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+        ${c.busy
+          ? `<button type="button" class="send stop" data-act="chat-stop" aria-label="Stop"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>`
+          : `<button type="submit" class="send" aria-label="Send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>`}
       </div>
     </form>`;
   autosize($('#chat-input'));
@@ -1279,20 +1281,22 @@ async function sendChat(retry = false) {
     c.text = ''; c.photo = null; c.photoUrl = '';
   }
   await S.saveChat(msgs);
-  c.busy = true; renderStylist();
+  const ctrl = new AbortController();
+  c.busy = true; c.ctrl = ctrl; renderStylist();
   const ai = S.getAISettings();
-  let reply;
+  let reply = null;
   try {
     const res = await G.chat({
-      key: ai.key, model: ai.model || G.DEFAULT_MODEL, messages: msgs, photo,
+      key: ai.key, model: ai.model || G.DEFAULT_MODEL, messages: msgs, photo, signal: ctrl.signal,
       closet: state.items, profile: S.getProfile(), wears: S.getWears(), looks: S.getLooks()
     });
     reply = { id: S.newId('m'), role: 'model', text: res.reply, outfits: res.outfits, packing: res.packing, gaps: res.gaps, at: Date.now() };
   } catch (err) {
-    reply = { id: S.newId('m'), role: 'model', error: true, text: err.message || 'Something went wrong.', at: Date.now() };
+    if (err?.name !== 'AbortError') reply = { id: S.newId('m'), role: 'model', error: true, text: err.message || 'Something went wrong.', at: Date.now() };
   }
-  await S.saveChat([...msgs, reply]);
-  c.busy = false;
+  if (c.ctrl !== ctrl) return;                 // stopped: the Stop button already reset everything
+  if (reply) await S.saveChat([...msgs, reply]);
+  c.busy = false; c.ctrl = null;
   if (state.tab === 'stylist') renderStylist();
   else toast('Your stylist replied ✦');
 }
@@ -1331,6 +1335,11 @@ function wireStylist() {
       }
       case 'chat-unphoto': if (c.photoUrl) URL.revokeObjectURL(c.photoUrl); c.photo = null; c.photoUrl = ''; c.text = $('#chat-input')?.value ?? c.text; renderStylist(); break;
       case 'chat-retry': sendChat(true); break;
+      case 'chat-stop': {
+        c.ctrl?.abort(); c.ctrl = null; c.busy = false;
+        renderStylist(); toast('Stopped');
+        break;
+      }
       case 'chat-clear':
         if (!confirm('Clear the whole conversation? Saved looks and your diary stay.')) break;
         await S.clearChat(); renderStylist(); break;

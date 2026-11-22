@@ -42,30 +42,62 @@ function describe(p) {
   return [p.subtype || p.category, p.color?.name, p.fabric, p.silhouette, p.thickness].filter(Boolean).join(', ');
 }
 
+function fail(status, text) { const e = new Error(text); e.status = status; return e; }
+
 async function call(url, key, init = {}) {
   let res;
   try {
     res = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key, ...(init.headers || {}) } });
-  } catch {
-    throw new Error('Could not reach Gemini — check your internet connection.');
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err;
+    throw fail(0, 'Could not reach Gemini — check your internet connection.');
   }
   let body = null;
   try { body = await res.json(); } catch {}
   if (!res.ok) {
     const msg = body?.error?.message || '';
-    if (res.status === 400 && /api key/i.test(msg)) throw new Error('That Gemini key was not accepted. Check it in Profile.');
-    if (res.status === 401 || res.status === 403) throw new Error('That Gemini key was not accepted. Check it in Profile.');
-    if (res.status === 404) throw new Error('That Gemini model was not found. Check the model name in Profile.');
-    if (res.status === 429) throw new Error('Gemini’s free limit is used up for now — try again later.');
-    if (res.status >= 500) throw new Error('Gemini is busy right now — try again in a minute.');
-    throw new Error(msg ? `Gemini: ${msg}` : `Gemini error ${res.status}.`);
+    if (res.status === 400 && /api key/i.test(msg)) throw fail(400, 'That Gemini key was not accepted. Check it in Profile.');
+    if (res.status === 401 || res.status === 403) throw fail(res.status, 'That Gemini key was not accepted. Check it in Profile.');
+    if (res.status === 404) throw fail(404, 'That Gemini model was not found. Check the model name in Profile.');
+    if (res.status === 429) throw fail(429, /day|daily|PerDay/i.test(msg)
+      ? 'You have used today’s free Gemini requests. They reset tomorrow.'
+      : 'Too many requests in a row — wait a minute, then try again.');
+    if (res.status === 503) throw fail(503, 'Google’s Gemini servers are overloaded right now (not your key or the app). Try again in a few minutes.');
+    if (res.status >= 500) throw fail(res.status, `Gemini had an error on Google’s side (${res.status}${msg ? `: ${msg}` : ''}). Try again in a minute.`);
+    throw fail(res.status, msg ? `Gemini: ${msg}` : `Gemini error ${res.status}.`);
   }
   return body;
 }
 
-/** POST generateContent and return { text, candidate }. */
-async function generate(key, model, body) {
-  const data = await call(API + encodeURIComponent(model || DEFAULT_MODEL) + ':generateContent', key, { method: 'POST', body: JSON.stringify(body) });
+const wait = (ms, signal) => new Promise((res, rej) => {
+  const t = setTimeout(res, ms);
+  signal?.addEventListener('abort', () => { clearTimeout(t); rej(new DOMException('Stopped', 'AbortError')); }, { once: true });
+});
+const BUSY = new Set([500, 502, 503, 504]);
+const FALLBACK_MODEL = 'gemini-flash-lite-latest';
+
+/**
+ * POST generateContent and return { text, candidate }.
+ * Google's servers are often briefly overloaded (503), so busy errors are retried twice with a pause,
+ * then tried once on the lighter Flash-Lite model before giving up.
+ */
+async function generate(key, model, body, signal) {
+  const post = m => call(API + encodeURIComponent(m) + ':generateContent', key, { method: 'POST', body: JSON.stringify(body), signal });
+  const primary = model || DEFAULT_MODEL;
+  let data, lastErr;
+  for (let attempt = 0; attempt < 3 && !data; attempt++) {
+    try { data = await post(primary); }
+    catch (err) {
+      if (err?.name === 'AbortError' || !BUSY.has(err.status)) throw err;
+      lastErr = err;
+      if (attempt < 2) await wait(1500 * 2 ** attempt, signal);
+    }
+  }
+  if (!data && primary !== FALLBACK_MODEL) {
+    try { data = await post(FALLBACK_MODEL); }
+    catch (err) { if (err?.name === 'AbortError') throw err; throw lastErr; }
+  }
+  if (!data) throw lastErr;
   const cand = data?.candidates?.[0];
   const text = (cand?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('');
   if (data?.promptFeedback?.blockReason) throw new Error('Gemini declined to answer that one. Try rephrasing.');
@@ -234,7 +266,7 @@ const CHAT_SCHEMA = {
  * photo: Blob attached to the newest user message (older photos are not re-sent).
  * Returns { reply, outfits: [{title, itemIds, note}], packing: {title, itemIds, tips}|null, gaps: [{piece, why, unlocks}] }.
  */
-export async function chat({ key, model = DEFAULT_MODEL, messages, photo = null, closet = [], profile, wears = [], looks = [] }) {
+export async function chat({ key, model = DEFAULT_MODEL, messages, photo = null, closet = [], profile, wears = [], looks = [], signal }) {
   if (!key) throw new Error('Add your Gemini key in Profile first.');
   const byId = new Map(closet.map(i => [i.id, i]));
   const names = ids => (ids || []).map(id => byId.get(id)?.name).filter(Boolean).join(', ');
@@ -284,7 +316,7 @@ export async function chat({ key, model = DEFAULT_MODEL, messages, photo = null,
     systemInstruction: { parts: [{ text: system }] },
     contents,
     generationConfig: { responseMimeType: 'application/json', responseSchema: CHAT_SCHEMA, temperature: 0.8 }
-  });
+  }, signal);
   const out = parseJSON(text);
   const valid = ids => [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(id => byId.has(id)))];
   const outfits = (Array.isArray(out.outfits) ? out.outfits : [])
