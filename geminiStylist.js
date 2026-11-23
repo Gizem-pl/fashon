@@ -7,7 +7,7 @@
    The API key is the user's own and lives only on this device; requests go straight from the browser to Google.
    No DOM and no storage here: data in, advice out. */
 
-import { WEAR_TAGS, CATEGORIES, FABRICS, THICKNESS, SILHOUETTES, SLEEVES, VIBES } from './stylistEngine.js';
+import { WEAR_TAGS, CATEGORIES, FABRICS, THICKNESS, SILHOUETTES, SLEEVES, VIBES, SCENT_MOODS, scentsOf } from './stylistEngine.js';
 
 const API = 'https://generativelanguage.googleapis.com/v1beta/models/';
 export const DEFAULT_MODEL = 'gemini-flash-latest';
@@ -130,7 +130,7 @@ export async function testKey(key, model = DEFAULT_MODEL) {
 export function closetLines(items) {
   return items.map(i => [
     i.id, i.name, [i.category, i.subtype].filter(Boolean).join('/'), i.color?.name, i.fabric, i.thickness && `${i.thickness.toLowerCase()} weight`,
-    i.silhouette && i.silhouette.toLowerCase(), i.sleeves && i.sleeves.toLowerCase(), (i.vibe || []).join('+'), i.scentMood
+    i.silhouette && i.silhouette.toLowerCase(), i.sleeves && i.sleeves.toLowerCase(), (i.vibe || []).join('+'), scentsOf(i).length && `scent: ${scentsOf(i).join(', ').toLowerCase()}`
   ].filter(Boolean).join(' · ')).join('\n');
 }
 
@@ -523,9 +523,10 @@ const PIECE_SCHEMA = {
     thickness: { type: 'STRING', enum: THICKNESS },
     silhouette: { type: 'STRING', enum: [...SILHOUETTES, 'none'] },
     sleeves: { type: 'STRING', enum: [...SLEEVES, 'none'] },
-    vibe: { type: 'ARRAY', items: { type: 'STRING', enum: VIBES } }
+    vibe: { type: 'ARRAY', items: { type: 'STRING', enum: VIBES } },
+    scents: { type: 'ARRAY', items: { type: 'STRING', enum: SCENT_MOODS }, description: 'Perfume only: its 2-4 main accords as listed on Fragrantica. Empty for anything else.' }
   },
-  required: ['name', 'category', 'subtype', 'fabric', 'thickness', 'silhouette', 'sleeves', 'vibe']
+  required: ['name', 'category', 'subtype', 'fabric', 'thickness', 'silhouette', 'sleeves', 'vibe', 'scents']
 };
 
 /** Returns { name, category, subtype, fabric, thickness, silhouette, sleeves, vibe[] } — '' for anything unknown. */
@@ -536,7 +537,8 @@ export async function describePiece({ key, model = DEFAULT_MODEL, photo }) {
       'This is a photo of one piece from my wardrobe (clothing, shoes, an accessory, makeup, nail polish or perfume).',
       'Identify it for my closet app. Choose the subtype only from those that belong to the category:',
       CATEGORIES.map(c => `${c.id}: ${c.subtypes.join(', ') || 'none'}`).join('\n'),
-      'Silhouette and sleeves are "none" when they do not apply. Pick 1–2 vibes.'
+      'Silhouette and sleeves are "none" when they do not apply. Pick 1–2 vibes.',
+      'For a perfume: read the brand and name from the bottle (e.g. "Byredo Gypsy Water"), fill "scents" with its main accords as Fragrantica lists them, fabric "Unknown", thickness "Light", vibe empty.'
     ].join('\n') }] }],
     generationConfig: { responseMimeType: 'application/json', responseSchema: PIECE_SCHEMA, temperature: 0.2 }
   });
@@ -549,6 +551,7 @@ export async function describePiece({ key, model = DEFAULT_MODEL, photo }) {
     thickness: THICKNESS.includes(o.thickness) ? o.thickness : '',
     silhouette: SILHOUETTES.includes(o.silhouette) ? o.silhouette : '',
     sleeves: SLEEVES.includes(o.sleeves) ? o.sleeves : '',
-    vibe: (o.vibe || []).filter(v => VIBES.includes(v)).slice(0, 2)
+    vibe: (o.vibe || []).filter(v => VIBES.includes(v)).slice(0, 2),
+    scents: scentsOf({ scentMood: o.scents || [] }).slice(0, 5)
   };
 }

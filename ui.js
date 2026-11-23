@@ -687,11 +687,11 @@ function renderCloset() {
           <div class="meta">
             <strong>${esc(i.name)}</strong>
             <div class="tags">
-              <span class="dot" style="background:${esc(i.color?.hex)}" title="${esc(i.color?.name)}"></span>
-              <span>${esc(i.contrast)}</span>
+              ${i.category === 'perfume' ? '' : `<span class="dot" style="background:${esc(i.color?.hex)}" title="${esc(i.color?.name)}"></span>
+              <span>${esc(i.contrast)}</span>`}
               ${i.silhouette ? `<span>${esc(i.silhouette)}</span>` : ''}
               ${i.thickness ? `<span>${esc(i.thickness)}</span>` : ''}
-              ${i.scentMood ? `<span>${esc(i.scentMood)}</span>` : ''}
+              ${E.scentsOf(i).slice(0, 3).map(sc => `<span>${esc(sc)}</span>`).join('')}
             </div>
           </div>
         </button>`).join('')}
@@ -725,6 +725,7 @@ function autoSleeves(d) {
   if (d.category !== 'tops' || d.sleevesTouched) return;
   d.sleeves = /(sleeveless|vest|corset|bustier)/i.test(d.subtype || '') ? 'Sleeveless' : 'Sleeved';
 }
+function isPerfume(d) { return d.category === 'perfume'; }
 function autoThickness(d) {
   if (!usesThick(d.category) || d.thickTouched) return;
   d.thickness = E.defaultThickness(d.category, d.subtype, d.fabric);
@@ -745,13 +746,14 @@ function openItemSheet(id) {
       thickTouched: !!existing.thickness, sleevesTouched: !!existing.sleeves,
       thickness: existing.thickness || (usesThick(existing.category) ? E.defaultThickness(existing.category, existing.subtype, existing.fabric) : ''),
       sleeves: existing.sleeves || (existing.category === 'tops' ? (E.isSleeveless(existing) ? 'Sleeveless' : 'Sleeved') : ''),
+      scentMood: E.scentsOf(existing),
       autoMsg: '', shapeSuggest: null, fabricError: false
     };
     state.draft = d;
   } else {
     state.draft = {
       id: S.newId('i'), isNew: true, category: cat, name: '', subtype: '', color: { hex: '#C9B79C', name: 'Beige' }, contrast: 'Medium',
-      silhouette: defaults.silhouette, vibe: [...defaults.vibe], scentMood: defaults.scentMood, fabric: '', fabricMix: '', thickness: '', sleeves: '', notes: '',
+      silhouette: defaults.silhouette, vibe: [...defaults.vibe], scentMood: [...defaults.scentMood], fabric: '', fabricMix: '', thickness: '', sleeves: '', notes: '',
       blob: null, previewUrl: '', nameTouched: false, contrastTouched: false, categoryTouched: false, subtypeTouched: false, fabricTouched: false,
       thickTouched: false, sleevesTouched: false, hasColor: false, autoMsg: '', shapeSuggest: null, fabricError: false
     };
@@ -782,13 +784,15 @@ const SECTIONS = {
       <input type="file" accept="image/*" id="photo-input" hidden>
       ${d.previewUrl ? `<span class="change">Change photo</span>` : ''}
     </label>
-    <p class="hint center" id="photo-status">${d.previewUrl ? '' : 'Colour and contrast are read from the photo automatically.'}</p>`,
+    <p class="hint center" id="photo-status">${d.previewUrl || isPerfume(d) ? '' : 'Colour and contrast are read from the photo automatically.'}</p>`,
 
   suggest: d => {
-    const ai = d.aiBusy ? `<p class="suggest pulse">✦ Your stylist is looking at the photo…</p>`
+    const ai = d.aiBusy ? `<p class="suggest">Asking AI… <small>(you can keep filling in)</small></p>`
       : d.aiMsg ? `<p class="suggest ok">✦ ${esc(d.aiMsg)}</p>`
       : d.aiErr ? `<p class="suggest">${esc(d.aiErr)} <button type="button" class="link strong" data-sheet="ai-fill">Try again</button></p>` : '';
-    return ai || (d.autoMsg ? `<p class="suggest ok">✦ ${esc(d.autoMsg)}</p>` : '');
+    const offer = !ai && d.isNew && d.blob && S.getAISettings().key
+      ? `<p class="suggest"><button type="button" class="link strong" data-sheet="ai-fill">✦ Fill in from photo with AI</button> <small>optional</small></p>` : '';
+    return ai || (d.autoMsg ? `<p class="suggest ok">✦ ${esc(d.autoMsg)}</p>` : '') + offer;
   },
 
   type: d => {
@@ -796,7 +800,7 @@ const SECTIONS = {
     return cat.subtypes.length ? `<span>Type</span>${chipRow('subtype', cat.subtypes, d.subtype, false)}` : '';
   },
 
-  color: d => `
+  color: d => isPerfume(d) ? '' : `
     <span>Colour</span>
     ${d.previewUrl ? `<button type="button" class="btn ghost small eyedrop ${d.picking ? 'on' : ''}" data-sheet="eyedropper">${d.picking ? 'Tap the photo above… (cancel)' : '⌖ Pick colour from the photo'}</button>` : ''}
     <div class="swatches">${E.COLOR_NAMES.map(([n, h]) =>
@@ -806,7 +810,7 @@ const SECTIONS = {
       <input id="f-colorname" type="text" value="${esc(d.color.name)}" aria-label="Colour name">
     </div>`,
 
-  contrast: d => `<span>Contrast level <small>auto-tagged</small></span>${chipRow('contrast', E.CONTRASTS, d.contrast, false)}`,
+  contrast: d => isPerfume(d) ? '' : `<span>Contrast level <small>auto-tagged</small></span>${chipRow('contrast', E.CONTRASTS, d.contrast, false)}`,
 
   sil: d => E.usesSilhouette(d.category) ? `<span>Silhouette</span>${chipRow('silhouette', E.SILHOUETTES, d.silhouette, false)}` : '',
 
@@ -829,7 +833,7 @@ const SECTIONS = {
   },
 
   vibe: d => d.category === 'perfume'
-    ? `<span>Scent mood</span>${chipRow('scentMood', E.SCENT_MOODS, d.scentMood, false)}`
+    ? `<span>Scent accords <small>pick any — as listed on Fragrantica</small></span>${chipRow('scentMood', E.SCENT_MOODS, d.scentMood, true)}`
     : `<span>Vibe <small>pick any</small></span>${chipRow('vibe', E.VIBES, d.vibe, true)}`
 };
 
@@ -841,7 +845,7 @@ function refresh(...keys) {
 /** Leaving the name blank auto-names the piece (e.g. “Beige Turtleneck”); keep that visible. */
 function updateNamePlaceholder() {
   const d = state.draft, el = $('#f-name'); if (!d || !el) return;
-  el.placeholder = d.isNew ? `e.g. black wool turtleneck — or leave blank for “${E.autoName(d.category, d.hasColor ? d.color.name : '', d.subtype)}”` : '';
+  el.placeholder = d.isNew ? `e.g. black wool turtleneck — or leave blank for “${E.autoName(d.category, d.hasColor && !isPerfume(d) ? d.color.name : '', d.subtype)}”` : '';
 }
 
 function renderSheet() {
@@ -859,7 +863,7 @@ function renderSheet() {
     </header>
     <div class="sheet-body">
       ${sec('photo', 'plain')}
-      <label class="field name-field"><span>Name <small>${d.isNew ? (S.getAISettings().key ? 'add a photo and your stylist fills in the rest' : 'type what it is and I will fill in category, fabric &amp; thickness') : ''}</small></span>
+      <label class="field name-field"><span>Name <small>${d.isNew ? 'type what it is and I will fill in category, fabric &amp; thickness' : ''}</small></span>
         <input id="f-name" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="e.g. black wool turtleneck">
       </label>
       ${sec('suggest', 'plain')}
@@ -889,12 +893,12 @@ function setCategory(cat, manual) {
   d.category = cat;
   const t = E.defaultTags(cat);
   d.subtype = ''; d.subtypeTouched = false;
-  d.silhouette = t.silhouette; d.vibe = [...t.vibe]; d.scentMood = t.scentMood;
+  d.silhouette = t.silhouette; d.vibe = [...t.vibe]; d.scentMood = [...t.scentMood];
   d.sleevesTouched = false; d.thickTouched = false;
   if (manual) d.categoryTouched = true;
   autoSleeves(d); autoThickness(d);
   const sel = $('#f-category'); if (sel) sel.value = cat;
-  refresh('type', 'sil', 'sleeves', 'fabric', 'thick', 'vibe', 'suggest');
+  refresh('type', 'color', 'contrast', 'sil', 'sleeves', 'fabric', 'thick', 'vibe', 'suggest');
   updateNamePlaceholder();
 }
 
@@ -957,7 +961,7 @@ function autoFromName() {
   const sig = () => [d.category, d.subtype, d.fabric, d.thickness, d.sleeves, d.autoMsg].join('|');
   const before = sig();
   const sug = E.suggestFromText(d.name);
-  if (!sug) { if (d.autoMsg) { d.autoMsg = ''; refresh('suggest'); } return; }
+  if (!sug) { if (d.autoMsg) { d.autoMsg = ''; refresh('suggest'); } scentsFromName(d); return; }
   const cat0 = d.category;
   if (sug.category && !d.categoryTouched) {
     if (sug.category !== d.category) setCategory(sug.category, false);
@@ -971,10 +975,19 @@ function autoFromName() {
   autoThickness(d);
   if (sug.thickness && !d.thickTouched && usesThick(d.category)) d.thickness = sug.thickness;
   if (sig() !== before) {
-    refresh('type', 'sleeves', 'fabric', 'thick', 'suggest');
+    refresh('type', 'color', 'contrast', 'sleeves', 'fabric', 'thick', 'vibe', 'suggest');
     updateNamePlaceholder();
     if (cat0 !== d.category) $('#f-category').value = d.category;
   }
+  scentsFromName(d);
+}
+
+/** Perfume named e.g. “vanilla oud” → tick those accords (until the user picks accords themselves). */
+function scentsFromName(d) {
+  if (!isPerfume(d) || d.scentTouched) return;
+  const words = (d.name || '').toLowerCase();
+  const found = E.SCENT_MOODS.filter(sc => new RegExp(`\\b${sc.toLowerCase().replace('è', '[eè]')}\\b`).test(words));
+  if (found.join() !== d.scentMood.join()) { d.scentMood = found; refresh('vibe'); }
 }
 
 async function handlePhoto(file) {
@@ -993,8 +1006,7 @@ async function handlePhoto(file) {
     refresh('photo', 'color', 'contrast', 'suggest');
     updateNamePlaceholder();
     const st = $('#photo-status');
-    if (st) st.textContent = `Detected ${color.name.toLowerCase()} · ${contrast.toLowerCase()} contrast`;
-    if (d.isNew && S.getAISettings().key) aiFill();
+    if (st) st.textContent = isPerfume(d) ? '' : `Detected ${color.name.toLowerCase()} · ${contrast.toLowerCase()} contrast`;
   } catch (err) {
     if (status) status.textContent = err.message || 'Could not read that photo.';
   }
@@ -1017,10 +1029,11 @@ async function aiFill() {
     if (r.sleeves && d.category === 'tops' && !d.sleevesTouched) d.sleeves = r.sleeves; else autoSleeves(d);
     if (r.thickness && usesThick(d.category) && !d.thickTouched) { d.thickness = r.thickness; filled.push('thickness'); } else autoThickness(d);
     if (r.vibe.length && !d.vibeTouched && d.category !== 'perfume') d.vibe = r.vibe;
+    if (d.category === 'perfume' && r.scents.length && !d.scentTouched) { d.scentMood = r.scents; filled.push('scent accords'); }
     if (r.name && !d.nameTouched) { d.name = r.name; const el = $('#f-name'); if (el) el.value = r.name; filled.unshift('name'); }
     d.aiMsg = filled.length ? `Filled in ${filled.join(', ')} from the photo — tap anything to change it.` : 'Looked at the photo — your choices are kept.';
     d.autoMsg = '';
-    refresh('type', 'sil', 'sleeves', 'fabric', 'thick', 'vibe');
+    refresh('type', 'color', 'contrast', 'sil', 'sleeves', 'fabric', 'thick', 'vibe');
     updateNamePlaceholder();
   } catch (err) {
     if (state.draft === d) d.aiErr = err.message || 'The AI could not read this photo.';
@@ -1038,13 +1051,13 @@ async function saveDraft() {
     toast('Choose a fabric — it is required.');
     return;
   }
-  const name = (d.name || '').trim() || E.autoName(d.category, d.color.name, d.subtype);
+  const name = (d.name || '').trim() || E.autoName(d.category, isPerfume(d) ? '' : d.color.name, d.subtype);
   const item = {
     id: d.id, category: d.category, name, subtype: d.subtype || '',
     color: d.color, contrast: d.contrast,
     silhouette: E.usesSilhouette(d.category) ? d.silhouette : '',
     vibe: d.category === 'perfume' ? [] : d.vibe,
-    scentMood: d.category === 'perfume' ? d.scentMood : '',
+    scentMood: d.category === 'perfume' ? [...d.scentMood] : [],
     fabric: needsFabric(d.category) ? d.fabric : '', fabricMix: needsFabric(d.category) ? (d.fabricMix || '').trim() : '',
     thickness: usesThick(d.category) ? d.thickness : '',
     sleeves: d.category === 'tops' ? d.sleeves : '',
@@ -1116,7 +1129,7 @@ function wireSheet() {
     else if (k === 'thickness') { d.thickness = v; d.thickTouched = true; refresh('thick'); }
     else if (k === 'sleeves') { d.sleeves = v; d.sleevesTouched = true; refresh('sleeves'); }
     else if (k === 'silhouette') { d.silhouette = d.silhouette === v ? '' : v; d.silTouched = true; refresh('sil'); }
-    else if (k === 'scentMood') { d.scentMood = d.scentMood === v ? '' : v; refresh('vibe'); }
+    else if (k === 'scentMood') { d.scentMood = d.scentMood.includes(v) ? d.scentMood.filter(x => x !== v) : [...d.scentMood, v]; d.scentTouched = true; refresh('vibe'); }
   });
   root.addEventListener('input', e => {
     const d = state.draft; if (!d) return;

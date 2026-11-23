@@ -4,7 +4,7 @@
    - localStorage: item metadata, profile, saved looks, saved link checks, outfit diary, AI settings
    No DOM rendering and no styling logic lives here. */
 
-import { DEFAULT_PROFILE, contrastFromHex, colorName, rgbToHex, rgbToHsl } from './stylistEngine.js';
+import { DEFAULT_PROFILE, scentsOf, contrastFromHex, colorName, rgbToHex, rgbToHsl } from './stylistEngine.js';
 
 const LS = {
   items: 'qc.items.v1',
@@ -313,8 +313,8 @@ export async function createBackup() {
 /** Plain-text/CSV list of the closet (no photos) for reading in Numbers/Excel. */
 export function createCSV() {
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const head = ['Name', 'Category', 'Type', 'Colour', 'Hex', 'Contrast', 'Silhouette', 'Thickness', 'Sleeves', 'Vibe', 'Scent mood', 'Fabric', 'Composition', 'Notes'];
-  const rows = getItems().map(i => [i.name, i.category, i.subtype, i.color?.name, i.color?.hex, i.contrast, i.silhouette, i.thickness, i.sleeves, (i.vibe || []).join('; '), i.scentMood, i.fabric, i.fabricMix, i.notes].map(q).join(','));
+  const head = ['Name', 'Category', 'Type', 'Colour', 'Hex', 'Contrast', 'Silhouette', 'Thickness', 'Sleeves', 'Vibe', 'Scent accords', 'Fabric', 'Composition', 'Notes'];
+  const rows = getItems().map(i => [i.name, i.category, i.subtype, i.color?.name, i.color?.hex, i.contrast, i.silhouette, i.thickness, i.sleeves, (i.vibe || []).join('; '), scentsOf(i).join('; '), i.fabric, i.fabricMix, i.notes].map(q).join(','));
   return { blob: new Blob([[head.map(q).join(','), ...rows].join('\n')], { type: 'text/csv' }), filename: 'quiet-closet-items.csv' };
 }
 

@@ -21,7 +21,22 @@ export const SILHOUETTES = ['Fitted', 'Relaxed', 'Voluminous'];
 export const VIBES = ['Old-Money', 'Effortless Chic', 'Cozy', 'Elevated', 'Minimal', 'Romantic', 'Edgy', 'Preppy', 'Bohemian', 'Sporty-Luxe', 'Evening', 'Casual'];
 export const THICKNESS = ['Light', 'Medium', 'Thick'];
 export const SLEEVES = ['Sleeved', 'Sleeveless'];
-export const SCENT_MOODS = ['Warm & Spicy', 'Woody', 'Bold Floral', 'Fresh & Clean'];
+/** Fragrance accords, following Fragrantica's main accords. A perfume can have several. */
+export const SCENT_MOODS = [
+  'Citrus', 'Fresh', 'Aquatic', 'Green', 'Aromatic', 'Herbal', 'Fruity',
+  'Floral', 'White Floral', 'Rose', 'Powdery', 'Iris',
+  'Sweet', 'Vanilla', 'Gourmand', 'Honey',
+  'Warm Spicy', 'Fresh Spicy', 'Amber', 'Balsamic',
+  'Woody', 'Oud', 'Leather', 'Musky', 'Earthy', 'Smoky', 'Mossy',
+  'Chypre', 'Fougère'
+];
+const LEGACY_SCENTS = { 'Warm & Spicy': 'Warm Spicy', 'Bold Floral': 'Floral', 'Fresh & Clean': 'Fresh' };
+/** A perfume's accords as an array — older pieces stored a single string. */
+export function scentsOf(item) {
+  const v = item?.scentMood;
+  const arr = Array.isArray(v) ? v : v ? [v] : [];
+  return [...new Set(arr.map(x => LEGACY_SCENTS[x] || x).filter(x => SCENT_MOODS.includes(x)))];
+}
 export const CONTRASTS = ['Light', 'Medium', 'Dark'];
 export const MOODS = ['Quiet Luxury', 'Cozy & Polished', 'Effortless Chic', 'Sharp & Confident', 'Soft & Romantic'];
 
@@ -33,13 +48,13 @@ export function usesSilhouette(catId) { return SILHOUETTE_CATS.has(catId); }
 /** Smart default tags pre-filled when a category is chosen. */
 export function defaultTags(catId) {
   switch (catId) {
-    case 'tops':      return { silhouette: 'Fitted',    vibe: ['Elevated'], scentMood: '' };
-    case 'bottoms':   return { silhouette: 'Relaxed',   vibe: ['Effortless Chic'], scentMood: '' };
-    case 'dresses':   return { silhouette: 'Fitted',    vibe: ['Elevated'], scentMood: '' };
-    case 'outerwear': return { silhouette: 'Relaxed',   vibe: ['Old-Money'], scentMood: '' };
-    case 'perfume':   return { silhouette: '',          vibe: [], scentMood: 'Fresh & Clean' };
-    case 'shoes':     return { silhouette: '',          vibe: ['Elevated'], scentMood: '' };
-    default:          return { silhouette: '',          vibe: ['Effortless Chic'], scentMood: '' };
+    case 'tops':      return { silhouette: 'Fitted',    vibe: ['Elevated'], scentMood: [] };
+    case 'bottoms':   return { silhouette: 'Relaxed',   vibe: ['Effortless Chic'], scentMood: [] };
+    case 'dresses':   return { silhouette: 'Fitted',    vibe: ['Elevated'], scentMood: [] };
+    case 'outerwear': return { silhouette: 'Relaxed',   vibe: ['Old-Money'], scentMood: [] };
+    case 'perfume':   return { silhouette: '',          vibe: [], scentMood: [] };
+    case 'shoes':     return { silhouette: '',          vibe: ['Elevated'], scentMood: [] };
+    default:          return { silhouette: '',          vibe: ['Effortless Chic'], scentMood: [] };
   }
 }
 
@@ -611,10 +626,35 @@ function completeOutfit(core, items, mood, intent, avoid) {
 /* ---------- Styling notes ---------- */
 
 const PERFUME_TIES = {
-  'Warm & Spicy': { tex: 'the warmth of wool, cashmere and brushed knits', mood: 'amber and spice make cosy textures feel intimate' },
-  'Woody':        { tex: 'structured tailoring and smooth leather',          mood: 'dry woods give clean lines depth and quiet authority' },
-  'Bold Floral':  { tex: 'fluid, soft fabrics like silk or fine jersey',      mood: 'a statement floral adds the romance a minimal palette leaves out' },
-  'Fresh & Clean':{ tex: 'crisp cotton and lightweight knits',                mood: 'a clean, airy scent keeps a polished outfit feeling light and modern' }
+  'Citrus':       { tex: 'crisp cotton and linen',                          mood: 'bright citrus keeps a look sharp and daytime-easy' },
+  'Fresh':        { tex: 'crisp cotton and lightweight knits',              mood: 'a clean, airy scent keeps a polished outfit feeling light and modern' },
+  'Aquatic':      { tex: 'light cotton and breezy linen',                   mood: 'a watery, airy scent suits relaxed, pared-back pieces' },
+  'Green':        { tex: 'natural cotton and linen',                        mood: 'crushed-leaf freshness feels quietly outdoorsy and unfussy' },
+  'Aromatic':     { tex: 'crisp shirting and fine knits',                   mood: 'lavender-and-herb aromatics feel clean and composed' },
+  'Herbal':       { tex: 'natural linen and cotton',                        mood: 'herbal notes feel calm, grounded and natural' },
+  'Fruity':       { tex: 'soft jersey and light knits',                     mood: 'a juicy fruity scent adds playfulness to simple pieces' },
+  'Floral':       { tex: 'fluid, soft fabrics like silk or fine jersey',    mood: 'a floral adds the romance a minimal palette leaves out' },
+  'White Floral': { tex: 'silk, satin and fluid drape',                     mood: 'creamy white flowers feel lush and evening-ready' },
+  'Rose':         { tex: 'silk, fine knits and soft tailoring',             mood: 'rose reads classic and feminine without trying too hard' },
+  'Powdery':      { tex: 'cashmere and soft, matte knits',                  mood: 'a powdery, soft-focus scent feels gentle and refined' },
+  'Iris':         { tex: 'cashmere and clean tailoring',                    mood: 'cool, buttery iris is the scent of quiet luxury' },
+  'Sweet':        { tex: 'soft knits and cosy textures',                    mood: 'a sweet scent feels warm and approachable' },
+  'Vanilla':      { tex: 'the softness of cashmere and brushed knits',      mood: 'vanilla wraps a cosy outfit in warmth' },
+  'Gourmand':     { tex: 'chunky knits and soft wool',                      mood: 'an edible, gourmand scent makes cosy layers feel even cosier' },
+  'Honey':        { tex: 'warm wool and suede',                             mood: 'golden honey adds a rich, sunny warmth' },
+  'Warm Spicy':   { tex: 'the warmth of wool, cashmere and brushed knits',  mood: 'amber and spice make cosy textures feel intimate' },
+  'Fresh Spicy':  { tex: 'crisp shirting and tailoring',                    mood: 'peppery, fresh spice adds snap to a clean outfit' },
+  'Amber':        { tex: 'wool, velvet and cashmere',                       mood: 'resinous amber gives a look depth and glow' },
+  'Balsamic':     { tex: 'velvet, wool and deep-toned knits',               mood: 'balsamic resins feel warm, deep and enveloping' },
+  'Woody':        { tex: 'structured tailoring and smooth leather',         mood: 'dry woods give clean lines depth and quiet authority' },
+  'Oud':          { tex: 'leather, velvet and dark tailoring',              mood: 'oud is dense and dramatic — let it carry an evening look' },
+  'Leather':      { tex: 'leather, suede and sharp tailoring',              mood: 'a leathery scent echoes edgy, structured pieces' },
+  'Musky':        { tex: 'soft cotton and second-skin knits',               mood: 'clean musk feels like your skin, only better' },
+  'Earthy':       { tex: 'raw linen, suede and textured wool',              mood: 'earthy patchouli and roots ground a look' },
+  'Smoky':        { tex: 'leather, dark wool and velvet',                   mood: 'incense and smoke add mystery to a dark palette' },
+  'Mossy':        { tex: 'tweed and textured wool',                         mood: 'mossy notes feel vintage and quietly elegant' },
+  'Chypre':       { tex: 'tailoring, silk blouses and polished leather',    mood: 'a chypre is classic, polished and grown-up' },
+  'Fougère':      { tex: 'crisp shirting and fine wool',                    mood: 'a fougère feels clean-shaven, crisp and classic' }
 };
 
 function nm(i) { return i ? i.name : ''; }
@@ -688,10 +728,11 @@ function perfumeNote(finish, o, mood, intent) {
   const pieces = outfitPieces(o);
   const fabric = pieces.find(i => i.fabric)?.fabric;
   if (p) {
-    const tie = PERFUME_TIES[p.scentMood] || PERFUME_TIES['Fresh & Clean'];
-    return `${nm(p)}${p.scentMood ? ` (${p.scentMood.toLowerCase()})` : ''} — ${tie.mood}. It echoes ${fabric ? lc(fabric) : tie.tex} here; spray on the pulse points and behind the knees, not on the knit, so the fibres stay clean.`;
+    const sc = scentsOf(p);
+    const tie = PERFUME_TIES[sc[0]] || PERFUME_TIES['Fresh'];
+    return `${nm(p)}${sc.length ? ` (${sc.slice(0, 3).join(', ').toLowerCase()})` : ''} — ${tie.mood}. It echoes ${fabric ? lc(fabric) : tie.tex} here; spray on the pulse points and behind the knees, not on the knit, so the fibres stay clean.`;
   }
-  const pick = intent === 'classic' ? 'Woody' : 'Fresh & Clean';
+  const pick = intent === 'classic' ? 'Woody' : 'Fresh';
   const tie = PERFUME_TIES[pick];
   return `If you reach for perfume, try something ${pick.toLowerCase()} — ${tie.mood}.`;
 }
