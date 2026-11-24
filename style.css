@@ -220,6 +220,12 @@ details.fold > summary .step::after { content: "+"; color: var(--sub); font: 300
 details.fold[open] > summary .step::after { content: "–"; }
 details.fold[open] > summary { margin-bottom: 4px; }
 details.sub-fold { margin: 2px 0 14px; }
+.core-fold > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.core-sum { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.core-sum em { font-style: normal; font-size: 13px; color: var(--sub); }
+.core-thumb { position: relative; width: 34px; height: 42px; border-radius: 7px; overflow: hidden; border: 1px solid var(--line); background: var(--surface); flex: none; }
+.core-thumb img, .core-thumb .ph { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.core-fold .core-tools { margin: 6px 0 10px; }
 details.sub-fold > summary { font-size: 13px; color: var(--sub); padding: 6px 0; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 4px; }
 details.sub-fold[open] > summary { margin-bottom: 8px; }
 

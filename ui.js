@@ -33,7 +33,7 @@ const state = {
   tab: 'studio',
   items: [],
   closetFilter: 'all',
-  studio: { core: new Set(), pickFilter: 'all', moodText: '', moodChips: [], finish: {}, result: null, openFinish: false,
+  studio: { core: new Set(), openCore: false, pickFilter: 'all', moodText: '', moodChips: [], finish: {}, result: null, openFinish: false,
             seg: 'create', collapsed: false, addingMood: false },
   checker: { url: '', name: '', text: '', type: 'auto', fit: 'auto', kind: 'auto', color: null, report: null, activeId: null,
              product: null, shots: [], reading: false, ai: null, aiBusy: false, openManual: false },
@@ -140,18 +140,22 @@ function studioCreateHTML() {
     <p class="center"><button class="link" data-act="start-over">Start over</button></p>`;
   }
   return `
-    <section class="card step-card">
-      <div class="step-row">
+    <details class="card fold step-card core-fold" id="core-fold" ${s.openCore ? 'open' : ''}>
+      <summary>
         <h2 class="step"><span>01</span>Core piece</h2>
+        <span class="core-sum" id="core-sum"></span>
+      </summary>
+      <div class="step-row core-tools">
+        <span class="hint" id="core-count"></span>
         <button class="btn ghost small" data-act="surprise">✦ Surprise me</button>
       </div>
       <div class="pills" id="pick-filters"></div>
       <div class="pick-grid" id="pick-grid"></div>
       <div class="row between">
-        <span class="hint" id="core-count"></span>
+        <button class="link" data-act="close-core">Done</button>
         <button class="link" data-act="clear-core">Clear</button>
       </div>
-    </section>
+    </details>
 
     <section class="card step-card">
       <h2 class="step"><span>02</span>Mood</h2>
@@ -201,23 +205,48 @@ function moodPicks() {
   return state.studio.moodChips.map(n => custom.find(m => m.name === n) || n);
 }
 
+/** Core-picker filters: bottoms are split into pants and skirts so trousers are easy to find. */
+const isSkirt = i => i.category === 'bottoms' && (i.subtype === 'Skirt' || /skirt/i.test(i.name || ''));
+const PICK_FILTERS = [
+  { id: 'all',       label: 'All',       test: () => true },
+  { id: 'tops',      label: 'Tops',      test: i => i.category === 'tops' },
+  { id: 'pants',     label: 'Pants',     test: i => i.category === 'bottoms' && !isSkirt(i) },
+  { id: 'skirts',    label: 'Skirts',    test: isSkirt },
+  { id: 'dresses',   label: 'Dresses',   test: i => i.category === 'dresses' },
+  { id: 'outerwear', label: 'Outerwear', test: i => i.category === 'outerwear' },
+  { id: 'shoes',     label: 'Shoes',     test: i => i.category === 'shoes' }
+];
+
 function renderPicker() {
   const s = state.studio;
   const clothing = state.items.filter(i => CLOTHING_CATS.includes(i.category));
   const filters = $('#pick-filters');
   if (!filters) return;
-  filters.innerHTML = ['all', ...CLOTHING_CATS].map(c => {
-    const n = c === 'all' ? clothing.length : clothing.filter(i => i.category === c).length;
-    if (c !== 'all' && !n) return '';
-    return `<button class="pill ${s.pickFilter === c ? 'on' : ''}" data-act="pick-filter" data-cat="${c}">${c === 'all' ? 'All' : esc(catLabel(c).replace(/ \(.*\)/, ''))}</button>`;
+  if (!PICK_FILTERS.some(f => f.id === s.pickFilter)) s.pickFilter = 'all';
+  filters.innerHTML = PICK_FILTERS.map(f => {
+    const n = clothing.filter(f.test).length;
+    if (f.id !== 'all' && !n) return '';
+    return `<button class="pill ${s.pickFilter === f.id ? 'on' : ''}" data-act="pick-filter" data-cat="${f.id}">${f.label}</button>`;
   }).join('');
-  const shown = s.pickFilter === 'all' ? clothing : clothing.filter(i => i.category === s.pickFilter);
+  const test = PICK_FILTERS.find(f => f.id === s.pickFilter).test;
+  const shown = clothing.filter(test);
   $('#pick-grid').innerHTML = shown.length
     ? shown.map(i => `<button class="pick ${s.core.has(i.id) ? 'on' : ''}" data-act="toggle-core" data-id="${i.id}" aria-pressed="${s.core.has(i.id)}">
         ${pic(i)}<span class="tick">✓</span><span class="cap">${esc(i.name)}</span></button>`).join('')
     : `<p class="hint pad">No clothing in your closet yet — add some in the Closet tab.</p>`;
-  const n = s.core.size;
-  $('#core-count').textContent = n ? `${n} core piece${n > 1 ? 's' : ''} selected` : 'Nothing selected yet';
+  updateCoreSummary();
+}
+
+/** Count line inside the fold, and the closed fold's summary: thumbnails of what is picked. */
+function updateCoreSummary() {
+  const s = state.studio, n = s.core.size;
+  const count = $('#core-count');
+  if (count) count.textContent = n ? `${n} core piece${n > 1 ? 's' : ''} selected` : 'Nothing selected yet';
+  const sum = $('#core-sum'); if (!sum) return;
+  const picked = [...s.core].map(itemById).filter(Boolean);
+  sum.innerHTML = picked.length
+    ? picked.slice(0, 4).map(i => `<span class="core-thumb" title="${esc(i.name)}">${pic(i)}</span>`).join('') + (picked.length > 4 ? `<em>+${picked.length - 4}</em>` : '')
+    : `<em>Tap to choose</em>`;
 }
 
 function lookCard(look, idx, saved) {
@@ -282,7 +311,7 @@ function staleResult() {
 
 function startOver() {
   const s = state.studio;
-  s.core.clear(); s.moodText = ''; s.moodChips = []; s.finish = {}; s.result = null; s.openFinish = false; s.pickFilter = 'all';
+  s.core.clear(); s.moodText = ''; s.moodChips = []; s.finish = {}; s.result = null; s.openFinish = false; s.openCore = false; s.pickFilter = 'all';
   s.collapsed = false; s.addingMood = false;
   renderStudio();
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -325,11 +354,12 @@ function wireStudio() {
         const id = b.dataset.id;
         s.core.has(id) ? s.core.delete(id) : s.core.add(id);
         b.classList.toggle('on', s.core.has(id)); b.setAttribute('aria-pressed', s.core.has(id));
-        const n = s.core.size; $('#core-count').textContent = n ? `${n} core piece${n > 1 ? 's' : ''} selected` : 'Nothing selected yet';
+        updateCoreSummary();
         staleResult();
         break;
       }
       case 'clear-core': s.core.clear(); renderPicker(); staleResult(); break;
+      case 'close-core': { const f = $('#core-fold'); if (f) f.open = false; s.openCore = false; f?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); break; }
       case 'surprise': generate(true); break;
       case 'generate': generate(false); break;
       case 'mood-chip': {
@@ -397,6 +427,7 @@ function wireStudio() {
   });
   v.addEventListener('toggle', e => {
     if (e.target.id === 'finish-fold') state.studio.openFinish = e.target.open;
+    if (e.target.id === 'core-fold') state.studio.openCore = e.target.open;
     const wid = e.target.dataset?.wearId;
     if (wid) { if (e.target.open) state.openWear = wid; else if (state.openWear === wid) state.openWear = null; }
   }, true);
@@ -930,6 +961,38 @@ function toggleEyedropper() {
   }
 }
 
+/**
+ * The true colour of the fabric around a tapped point. A plain average gets pulled darker by folds and
+ * shadows and lighter by shine, and a tap near an edge picks up background. So: take a patch sized to the
+ * photo, keep only pixels close to the colour right under the finger, drop the darkest and brightest
+ * fifth (shadow and glare), and use the median of what is left.
+ */
+function sampleFabric(ctx, nw, nh, px, py) {
+  const R = Math.max(4, Math.round(Math.min(nw, nh) * 0.025));
+  const x0 = Math.max(0, px - R), y0 = Math.max(0, py - R);
+  const w = Math.min(nw, px + R + 1) - x0, h = Math.min(nh, py + R + 1) - y0;
+  const d = ctx.getImageData(x0, y0, w, h).data;
+  const all = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = x0 + x - px, dy = y0 + y - py;
+    if (dx * dx + dy * dy > R * R) continue;                                // round patch
+    const i = (y * w + x) * 4;
+    all.push([d[i], d[i + 1], d[i + 2], dx * dx + dy * dy]);
+  }
+  const lab = p => E.rgbToLab(p[0], p[1], p[2]);
+  // the colour right under the finger (closest few pixels) is the reference
+  const near = all.slice().sort((a, b) => a[3] - b[3]).slice(0, Math.max(5, Math.round(all.length * 0.08)));
+  const med = (arr, k) => { const v = arr.map(p => p[k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+  const ref = lab([med(near, 0), med(near, 1), med(near, 2)]);
+  // same garment = similar hue/chroma; lightness may vary more (folds)
+  let same = all.filter(p => { const [L, A, B] = lab(p); return 0.25 * (L - ref[0]) ** 2 + (A - ref[1]) ** 2 + (B - ref[2]) ** 2 < 18 ** 2; });
+  if (same.length < 8) same = near;
+  same.sort((a, b) => lab(a)[0] - lab(b)[0]);
+  const cut = Math.floor(same.length * 0.2);
+  const mid = same.length - 2 * cut >= 5 ? same.slice(cut, same.length - cut) : same;
+  return E.rgbToHex(med(mid, 0), med(mid, 1), med(mid, 2));
+}
+
 function sampleFromPhoto(e, up) {
   const d = state.draft; const img = $('img', up);
   if (!d || !img || !img.naturalWidth) return;
@@ -940,12 +1003,7 @@ function sampleFromPhoto(e, up) {
   if (px < 0 || py < 0 || px >= nw || py >= nh) { toast('Tap on the garment itself.'); return; }
   const cv = document.createElement('canvas'); cv.width = nw; cv.height = nh;
   const ctx = cv.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0);
-  const R = 3, x0 = Math.max(0, px - R), y0 = Math.max(0, py - R);
-  const w = Math.min(nw - x0, 2 * R + 1), h = Math.min(nh - y0, 2 * R + 1);
-  const px4 = ctx.getImageData(x0, y0, w, h).data;
-  let rr = 0, gg = 0, bb = 0; const n = px4.length / 4;
-  for (let i = 0; i < px4.length; i += 4) { rr += px4[i]; gg += px4[i + 1]; bb += px4[i + 2]; }
-  const hex = E.rgbToHex(rr / n, gg / n, bb / n);
+  const hex = sampleFabric(ctx, nw, nh, px, py);
   const name = E.colorName(hex);
   setColor(hex, name, false);
   d.picking = false;
