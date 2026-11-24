@@ -180,6 +180,8 @@ input[type=color] { width: 54px; height: 46px; padding: 3px; border: 1px solid v
 .upload.picking .change { display: none; }
 .suggest { font-size: 14px; margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--gold-soft); line-height: 1.4; }
 .suggest.ok { color: var(--gold); }
+.queue-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; color: var(--sub); }
+.queue-bar .link { white-space: nowrap; }
 .field > span small.err { color: #e07a7a; font-weight: 600; }
 .fab-info { margin: 8px 0 0; }
 .chipset { display: inline-flex; align-items: center; }

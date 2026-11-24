@@ -39,6 +39,8 @@ const state = {
              product: null, shots: [], reading: false, ai: null, aiBusy: false, openManual: false },
   chat: { text: '', photo: null, photoUrl: '', busy: false, ctrl: null },
   draft: null,
+  addQueue: [],          // photos picked together, waiting for their own Add sheet
+  addTotal: 0,           // size of the current batch, for “2 of 5”
   wear: null,            // outfit-diary sheet draft
   openWear: null,        // diary entry currently expanded
   aiBusy: new Set()      // diary entries waiting on Gemini
@@ -762,9 +764,10 @@ function autoThickness(d) {
   d.thickness = E.defaultThickness(d.category, d.subtype, d.fabric);
 }
 
-function openItemSheet(id) {
+function openItemSheet(id, startCat) {
   const existing = id ? itemById(id) : null;
-  const cat = existing?.category || (state.closetFilter !== 'all' ? state.closetFilter : 'tops');
+  if (existing) { state.addQueue = []; state.addTotal = 0; }
+  const cat = existing?.category || startCat || (state.closetFilter !== 'all' ? state.closetFilter : 'tops');
   const defaults = E.defaultTags(cat);
   if (existing) {
     const fi = E.fabricInfo(existing.fabric);
@@ -793,8 +796,30 @@ function openItemSheet(id) {
   renderSheet();
 }
 
+/** At most this many photos per batch: each still needs a quick check (fabric etc.), so more becomes a chore. */
+const MAX_BATCH = 10;
+
+/** Open the Add sheet for the next waiting photo, starting from the previous piece's category. */
+function nextQueued(prevCat) {
+  const file = state.addQueue.shift();
+  if (!file) { state.addTotal = 0; return false; }
+  openItemSheet(null, prevCat);
+  handlePhoto([file]);
+  return true;
+}
+
+/** Drop the current new piece and move on to the next photo in the batch. */
+function skipDraft() {
+  const d = state.draft; if (!d) return;
+  if (d.isNew && d.previewUrl) URL.revokeObjectURL(d.previewUrl);
+  state.draft = null;
+  if (!nextQueued(d.category)) closeSheet();
+}
+
 function closeSheet() {
   const d = state.draft;
+  if (state.addQueue.length && d && !confirm(`Stop adding? The ${state.addQueue.length} photo${state.addQueue.length > 1 ? 's' : ''} still waiting will be dropped.`)) return;
+  state.addQueue = []; state.addTotal = 0;
   if (d?.isNew && d.previewUrl) URL.revokeObjectURL(d.previewUrl);
   state.draft = null;
   $('#sheet-root').innerHTML = '';
@@ -812,10 +837,17 @@ const SECTIONS = {
   photo: d => `
     <label class="upload ${d.previewUrl ? 'has' : ''}">
       ${d.previewUrl ? `<img src="${d.previewUrl}" alt="Preview">` : `<span class="plus">+</span><span>Take or choose a photo</span>`}
-      <input type="file" accept="image/*" id="photo-input" hidden>
+      <input type="file" accept="image/*" id="photo-input" ${d.isNew && !d.previewUrl ? 'multiple' : ''} hidden>
       ${d.previewUrl ? `<span class="change">Change photo</span>` : ''}
     </label>
-    <p class="hint center" id="photo-status">${d.previewUrl || isPerfume(d) ? '' : 'Colour and contrast are read from the photo automatically.'}</p>`,
+    <p class="hint center" id="photo-status">${d.previewUrl || isPerfume(d) ? '' : `Colour and contrast are read from the photo automatically.${d.isNew ? ` Pick up to ${MAX_BATCH} photos to add several pieces in a row.` : ''}`}</p>`,
+
+  queue: d => {
+    const n = state.addQueue.length;
+    if (!d.isNew || !n) return '';
+    return `<div class="queue-bar"><span>${n} more photo${n > 1 ? 's' : ''} waiting — Save moves to the next</span>
+      <button type="button" class="link" data-sheet="skip">Skip this one</button></div>`;
+  },
 
   suggest: d => {
     const ai = d.aiBusy ? `<p class="suggest">Asking AI… <small>(you can keep filling in)</small></p>`
@@ -889,10 +921,11 @@ function renderSheet() {
   <div class="sheet" role="dialog" aria-modal="true" aria-label="${d.isNew ? 'Add piece' : 'Edit piece'}">
     <header class="sheet-head">
       <button class="link" data-sheet="close">Cancel</button>
-      <h2>${d.isNew ? 'Add a piece' : 'Edit piece'}</h2>
-      <button class="link strong" data-sheet="save">Save</button>
+      <h2>${!d.isNew ? 'Edit piece' : state.addTotal > 1 ? `Piece ${state.addTotal - state.addQueue.length} of ${state.addTotal}` : 'Add a piece'}</h2>
+      <button class="link strong" data-sheet="save">${d.isNew && state.addQueue.length ? 'Save &amp; next' : 'Save'}</button>
     </header>
     <div class="sheet-body">
+      ${sec('queue', 'plain')}
       ${sec('photo', 'plain')}
       <label class="field name-field"><span>Name <small>${d.isNew ? 'type what it is and I will fill in category, fabric &amp; thickness' : ''}</small></span>
         <input id="f-name" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="e.g. black wool turtleneck">
@@ -1048,8 +1081,19 @@ function scentsFromName(d) {
   if (found.join() !== d.scentMood.join()) { d.scentMood = found; refresh('vibe'); }
 }
 
-async function handlePhoto(file) {
-  const d = state.draft; if (!d || !file) return;
+async function handlePhoto(files) {
+  const d = state.draft; if (!d || !files?.length) return;
+  let [file, ...rest] = [...files];
+  if (rest.length && d.isNew) {
+    const room = MAX_BATCH - 1 - state.addQueue.length;
+    if (rest.length > room) toast(`Up to ${MAX_BATCH} at a time — the first ${MAX_BATCH} are queued.`);
+    rest = rest.slice(0, Math.max(0, room));
+    if (rest.length) {
+      if (!state.addQueue.length) state.addTotal = 1;
+      state.addQueue.push(...rest); state.addTotal += rest.length;
+      renderSheet();
+    }
+  }
   const status = $('#photo-status');
   if (status) status.textContent = 'Reading colours…';
   try {
@@ -1137,8 +1181,10 @@ async function saveDraft() {
   state.draft = null; $('#sheet-root').innerHTML = ''; document.body.classList.remove('locked');
   refreshItems();
   S.requestPersistence();
-  toast(wasNew ? 'Added to your closet' : 'Saved');
   renderCloset();
+  if (wasNew && nextQueued(item.category)) { toast(`Added — ${state.addQueue.length + 1} to go`); return; }
+  state.addTotal = 0;
+  toast(wasNew ? 'Added to your closet' : 'Saved');
 }
 
 async function deleteDraft() {
@@ -1161,6 +1207,7 @@ function wireSheet() {
       if (a === 'close') closeSheet();
       if (a === 'save') saveDraft();
       if (a === 'delete') deleteDraft();
+      if (a === 'skip') skipDraft();
       if (a === 'eyedropper') toggleEyedropper();
       if (a === 'ai-fill') aiFill();
       return;
@@ -1204,7 +1251,7 @@ function wireSheet() {
   });
   root.addEventListener('change', e => {
     const d = state.draft; if (!d) return;
-    if (e.target.id === 'photo-input') handlePhoto(e.target.files?.[0]);
+    if (e.target.id === 'photo-input') handlePhoto(e.target.files);
     if (e.target.id === 'f-color') setColor(e.target.value, E.colorName(e.target.value), true);
     if (e.target.id === 'f-category') { d.autoMsg = ''; setCategory(e.target.value, true); }
   });
