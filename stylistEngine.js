@@ -19,7 +19,7 @@ export const CATEGORIES = [
 
 export const SILHOUETTES = ['Fitted', 'Relaxed', 'Voluminous'];
 export const VIBES = ['Old-Money', 'Effortless Chic', 'Cozy', 'Elevated', 'Minimal', 'Romantic', 'Edgy', 'Preppy', 'Bohemian', 'Sporty-Luxe', 'Evening', 'Casual',
-  'Classic', 'Parisian', 'Scandi', 'Feminine', 'Androgynous', 'Office', 'Vintage', 'Coastal', 'Artsy', 'Streetwear', 'Glam', 'Grunge'];
+  'Classic', 'Office', 'Vintage', 'Streetwear', 'Glam'];
 export const THICKNESS = ['Light', 'Medium', 'Thick'];
 export const SLEEVES = ['Sleeved', 'Sleeveless'];
 /** Fragrance accords, following Fragrantica's main accords. A perfume can have several. */
@@ -326,7 +326,7 @@ export function autoName(catId, colorNm, subtype) {
 const MOOD_PROFILES = {
   'Quiet Luxury': {
     feeling: 'composed, expensive-feeling and calm',
-    vibes: ['Old-Money', 'Elevated', 'Minimal', 'Classic', 'Scandi'], tonal: true,
+    vibes: ['Old-Money', 'Elevated', 'Minimal', 'Classic'], tonal: true,
     hair: ['a low, sleek chignon with a soft centre part', 'smooth, brushed-back hair tucked behind the ears'],
     makeup: 'skin-first: sheer base, soft taupe lids, a barely-there rosy-nude lip',
     nails: 'a sheer milky nude or soft ballet pink, short and rounded',
@@ -335,7 +335,7 @@ const MOOD_PROFILES = {
   },
   'Cozy & Polished': {
     feeling: 'warm, held and effortlessly put-together',
-    vibes: ['Cozy', 'Elevated', 'Casual', 'Preppy', 'Scandi', 'Classic'], tonal: true,
+    vibes: ['Cozy', 'Elevated', 'Casual', 'Preppy', 'Classic'], tonal: true,
     hair: ['loose, soft waves tucked behind one ear', 'a low ponytail with a few face-framing strands left out'],
     makeup: 'a warm, cream-based glow: peachy blush, brown mascara, a satin balm',
     nails: 'a soft oat or café-au-lait cream, glossy',
@@ -344,7 +344,7 @@ const MOOD_PROFILES = {
   },
   'Effortless Chic': {
     feeling: 'relaxed, a little undone and quietly cool',
-    vibes: ['Effortless Chic', 'Old-Money', 'Casual', 'Bohemian', 'Sporty-Luxe', 'Parisian', 'Coastal', 'Vintage', 'Artsy', 'Streetwear'], tonal: false,
+    vibes: ['Effortless Chic', 'Old-Money', 'Casual', 'Bohemian', 'Sporty-Luxe', 'Vintage', 'Streetwear'], tonal: false,
     hair: ['a slightly undone low bun with loose pieces', 'a tousled half-up twist'],
     makeup: 'a bare face with a blurred brown-red lip and groomed brows',
     nails: 'bare natural nails with a clear gloss, or a pale greige',
@@ -353,7 +353,7 @@ const MOOD_PROFILES = {
   },
   'Sharp & Confident': {
     feeling: 'precise, powerful and in charge',
-    vibes: ['Elevated', 'Old-Money', 'Edgy', 'Evening', 'Preppy', 'Office', 'Androgynous', 'Glam', 'Grunge'], tonal: false,
+    vibes: ['Elevated', 'Old-Money', 'Edgy', 'Evening', 'Preppy', 'Office', 'Glam'], tonal: false,
     hair: ['a high, polished ponytail pulled tight', 'a sleek, side-parted blowout tucked behind the ear'],
     makeup: 'defined brows, a crisp winged liner and a deep berry or classic red lip',
     nails: 'a deep oxblood, espresso or crisp milky white — short, squared',
@@ -362,7 +362,7 @@ const MOOD_PROFILES = {
   },
   'Soft & Romantic': {
     feeling: 'tender, graceful and quietly romantic',
-    vibes: ['Effortless Chic', 'Cozy', 'Romantic', 'Bohemian', 'Evening', 'Feminine', 'Parisian', 'Vintage'], tonal: true,
+    vibes: ['Effortless Chic', 'Cozy', 'Romantic', 'Bohemian', 'Evening', 'Vintage'], tonal: true,
     hair: ['soft waves pinned half-up with a ribbon or clip', 'a loose, low side braid with face-framing pieces'],
     makeup: 'rosy cheeks, dewy skin, soft pink lids and a stained petal lip',
     nails: 'a sheer blush pink or soft rosé, glossy and rounded',
