@@ -98,7 +98,7 @@ function renderStudio() {
 
   if (!state.items.length) {
     v.innerHTML = `
-      <header class="page-head"><p class="eyebrow">${greeting()}</p><h1>Outfit <em>Studio</em></h1>
+      <header class="page-head"><p class="eyebrow">${greeting()}</p><h1><em>Studio</em></h1>
       <p class="sub">Two considered looks, built from the pieces you already own.</p></header>
       <div class="empty card">
         <h2>Your closet is empty</h2>
@@ -111,7 +111,7 @@ function renderStudio() {
   const looks = S.getLooks().length, wears = S.getWears().length;
   const seg = (id, label, n) => `<button class="seg-btn ${s.seg === id ? 'on' : ''}" data-act="seg" data-seg="${id}" aria-pressed="${s.seg === id}">${label}${n ? ` <small>${n}</small>` : ''}</button>`;
   v.innerHTML = `
-    <header class="page-head"><p class="eyebrow">${greeting()}</p><h1>Outfit <em>Studio</em></h1></header>
+    <header class="page-head"><p class="eyebrow">${greeting()}</p><h1><em>Studio</em></h1></header>
     <nav class="seg" aria-label="Studio sections">${seg('create', 'Create')}${seg('saved', 'Saved', looks)}${seg('diary', 'Diary', wears)}</nav>
     ${s.seg === 'saved' ? '<div id="studio-saved"></div>' : s.seg === 'diary' ? '<div id="studio-diary"></div>' : studioCreateHTML(clothing)}
   `;

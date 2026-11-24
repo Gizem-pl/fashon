@@ -121,37 +121,58 @@ export function isSleeveless(item) {
   if (/(sleeveless|vest|corset|bustier)/i.test(sub)) return true;
   return /(sleeveless|\btank\b|\bcami\b|camisole|\bvest\b)/i.test(item?.name || '');
 }
-/** 0 = base layer, 1 = mid layer (knits, vests), 2 = jacket-type layer. */
-function layerRank(item) {
+/** Where a top sits in a stack: 0 base (blouse, tee, thin turtleneck), 1 knit (sweater, vest), 2 cardigan, 3 blazer / jacket. */
+function layerLevel(item) {
   const s = `${item?.subtype || ''} ${item?.name || ''}`;
-  if (/(blazer|jacket)/i.test(s)) return 2;
-  if (/(turtle|roll)/i.test(s)) return thicknessOf(item) === 1 ? 0 : 1;
-  if (/(tee|tank|blouse|shirt|bodysuit|corset|bustier|cami)/i.test(s)) return 0;
+  if (/(blazer|jacket)/i.test(s)) return 3;
+  if (/cardigan/i.test(s)) return 2;
+  if (/(turtle|roll ?neck|mock neck)/i.test(s)) return thicknessOf(item) === 1 ? 0 : 1;
+  if (/\b(tee|t-shirt|tank|blouse|shirt|bodysuit|corset|bustier|cami|camisole)\b/i.test(s)) return 0;
   return 1;
 }
+const LEVEL_WORD = ['base tops', 'sweaters', 'cardigans', 'blazers'];
+const isHighNeck = i => /(turtle|roll ?neck|polo neck|mock neck)/i.test(`${i?.subtype || ''} ${i?.name || ''}`);
 
 /**
  * Can two tops be worn one over the other? Returns { ok, inner, outer, penalty, reason }.
- * Thick pieces never go under another top, a thin layer cannot go over a thicker one,
- * and a sleeveless knit works over a thin sleeved base (blouse, tee).
+ * Everyday logic: a blouse or tee goes under a sweater, cardigan or blazer; a cardigan goes over a sweater
+ * only when that sweater is thin; never two of the same kind; nothing thick underneath; nothing thin on top of thick.
  */
 export function layerPair(a, b) {
+  const la = layerLevel(a), lb = layerLevel(b);
   let inner = a, outer = b;
-  const ra = layerRank(a), rb = layerRank(b);
-  if (ra !== rb) { if (ra > rb) { inner = b; outer = a; } }
-  else if (isSleeveless(a) !== isSleeveless(b)) { if (isSleeveless(a)) { inner = b; outer = a; } }
-  else if (thicknessOf(a) > thicknessOf(b)) { inner = b; outer = a; }
-  const ti = thicknessOf(inner), to = thicknessOf(outer), jacket = layerRank(outer) === 2;
-  const isCardi = x => /cardigan/i.test(`${x.subtype || ''} ${x.name || ''}`);
-  if (layerRank(a) === 1 && layerRank(b) === 1 && !isSleeveless(a) && !isSleeveless(b) && !isCardi(outer))
-    return { ok: false, inner, outer, penalty: 0, reason: `${inner.name} and ${outer.name} are both sleeved knits — nobody wears two sweaters on top of each other.` };
-  if (ti === 3 && !jacket) return { ok: false, inner, outer, penalty: 0, reason: `${inner.name} is too thick to wear under another top — layering ${outer.name} over it would be bulky. A thin blouse or tee underneath would work.` };
-  if (to < ti && !jacket) return { ok: false, inner, outer, penalty: 0, reason: `${outer.name} is thinner than ${inner.name}, so it will not sit over it. Layer it over a thin base such as a blouse or tee instead.` };
+  if (la > lb || (la === lb && (isSleeveless(a) !== isSleeveless(b) ? isSleeveless(a) : thicknessOf(a) > thicknessOf(b)))) { inner = b; outer = a; }
+  const li = layerLevel(inner), lo = layerLevel(outer), ti = thicknessOf(inner), to = thicknessOf(outer);
+  const no = reason => ({ ok: false, inner, outer, penalty: 0, reason });
+  // a sleeveless knit over a thin sleeved knit is the one same-level pairing that works
+  const vestOver = li === 1 && lo === 1 && isSleeveless(outer) && !isSleeveless(inner) && ti === 1;
+  if (li === lo && !vestOver)
+    return no(li === 0 ? `${inner.name} and ${outer.name} are both base tops — wear one of them under a sweater or cardigan instead.`
+      : `${inner.name} and ${outer.name} are both ${LEVEL_WORD[li]} — two of the same kind do not go on top of each other.`);
+  if (isHighNeck(outer) && lo <= 1) return no(`Nothing shows under ${outer.name}'s high neck — wear it on its own, or with a cardigan or blazer over it.`);
+  if (li === 1 && isSleeveless(inner) && lo === 2) return no(`A cardigan over ${inner.name} hides the vest — wear the vest over a blouse or tee instead.`);
+  if (li === 1 && lo === 2 && ti > 1) return no(`${inner.name} is too thick to go under ${outer.name} — a cardigan only sits over a thin knit (thickness Light) or a blouse or tee.`);
+  if (li === 2 && lo === 3) return no(`${inner.name} under ${outer.name} is one layer too many — pick one of the two.`);
+  if (ti === 3) return no(`${inner.name} is too thick to wear under another top — let it be the outer piece, with a thin blouse or tee underneath.`);
+  if (to < ti && lo < 3) return no(`${outer.name} is thinner than ${inner.name}, so it will not sit over it. Layer it over a thin base such as a blouse or tee instead.`);
   let penalty = 0;
-  if (isSleeveless(outer) && ti === 1) penalty += 1.2;          // sleeveless knit over a thin sleeved base: classic
-  if (ti >= 2 && to === ti && !jacket) penalty -= 1.5;          // same medium weight twice: bulky
+  if (li === 0 && lo >= 1) penalty += 0.8;                      // blouse or tee under a knit, cardigan or blazer: the everyday classic
+  if (isSleeveless(outer) && ti === 1) penalty += 1.2;          // sleeveless knit over a thin sleeved base
+  if (ti >= 2 && to === ti && lo < 3) penalty -= 1.5;           // same medium weight twice: bulky
   if (outer.silhouette === 'Fitted' && ti >= 2) penalty -= 1.5; // fitted outer over a substantial base
   return { ok: true, inner, outer, penalty, reason: '' };
+}
+
+/** Order up to three tops from the inside out; every pair must be wearable together. */
+const stackKey = t => layerLevel(t) * 10 + (isSleeveless(t) ? 5 : 0) + thicknessOf(t);
+function orderStack(tops) {
+  const s = tops.slice().sort((a, b) => stackKey(a) - stackKey(b));
+  if (s.length > 3) return { ok: false, reason: 'Three tops is the most that can be layered.' };
+  for (let i = 0; i < s.length; i++) for (let j = i + 1; j < s.length; j++) {
+    const lp = layerPair(s[i], s[j]);
+    if (!lp.ok) return { ok: false, reason: lp.reason };
+  }
+  return { ok: true, tops: s };
 }
 
 /** Soft penalty for a coat/jacket over what is underneath it. */
@@ -533,16 +554,13 @@ function learnedItem(c) { return LEARN && c ? clampAbs(LEARN.item.get(c.id) || 0
 
 const CLOTHING_SLOTS = new Set(['top', 'bottom', 'dress', 'outer', 'shoes']);
 
-function emptyOutfit() { return { top: [], bottom: null, dress: null, outer: null, shoes: null, warnings: [] }; }
+function emptyOutfit() { return { top: [], bottom: null, dress: null, outer: null, shoes: null, jewelry: [], warnings: [] }; }
 
 function placeCore(outfit, item) {
   const slot = categoryById(item.category)?.slot;
   if (slot === 'top') {
-    if (outfit.top.length === 0) outfit.top.push(item);
-    else if (outfit.top.length === 1) {
-      const lp = layerPair(outfit.top[0], item);
-      if (lp.ok) outfit.top.push(item); else outfit.warnings.push(lp.reason);
-    }
+    const st = orderStack([...outfit.top, item]);
+    if (st.ok) outfit.top = st.tops; else outfit.warnings.push(st.reason);
   }
   else if (slot === 'bottom' || slot === 'dress' || slot === 'outer' || slot === 'shoes') { if (!outfit[slot]) outfit[slot] = item; }
 }
@@ -586,6 +604,49 @@ export function pickSurpriseCore(items) {
   return best;
 }
 
+/** Cold months (October–April) favour knitwear and an extra layer. Set per buildLooks call. */
+let COLD = false;
+
+/** When the stylist picks the main top itself: in the cold months reach for a sleeved knit, ideally a warm fabric. */
+function mainTopBonus(t) {
+  if (!COLD) return 0;
+  const lvl = layerLevel(t);
+  return (lvl === 1 && !isSleeveless(t) ? 1.2 : 0) + (fabricInfo(t.fabric)?.warmth === 'warm' ? 0.5 : 0);
+}
+
+/* ---------- Jewelry ---------- */
+const JEWEL_KINDS = [['Earrings', /earring|\bstuds?\b|hoops?\b/i], ['Necklace', /necklace|pendant|chain|pearls?\b/i],
+  ['Bracelet / Watch', /bracelet|watch|bangle|cuff/i], ['Ring', /\brings?\b/i]];
+function jewelKind(i) {
+  if (JEWEL_KINDS.some(([k]) => k === i.subtype)) return i.subtype;
+  if (/scarf|bag/i.test(i.subtype || '')) return null;
+  const s = `${i.subtype || ''} ${i.name || ''}`;
+  return JEWEL_KINDS.find(([, re]) => re.test(s))?.[0] || null;
+}
+function metalOf(i) {
+  const s = lc(`${i.name || ''} ${i.color?.name || ''} ${i.fabric || ''}`);
+  if (/silver|white gold|steel|platinum|chrome/.test(s)) return 'silver';
+  if (/gold|brass|bronze/.test(s)) return 'gold';
+  return '';
+}
+
+/** One or two pieces from the closet: earrings first, then a necklace (not with a high neck) or a bracelet — same metal. */
+function pickJewelry(o, items, mood, intent, avoid) {
+  const neck = o.dress || o.top[0];
+  const high = isHighNeck(neck);
+  const anchor = o.top[o.top.length - 1] || o.dress || o.bottom;
+  const cands = items.filter(i => i.category === 'jewelry' && jewelKind(i) && !(high && jewelKind(i) === 'Necklace'));
+  if (!cands.length) return [];
+  const base = j => vibeScore(j, mood) + (anchor ? harmony(j.color?.hex, anchor.color?.hex) * 0.5 : 0);
+  const kindPref = { Earrings: 1, Necklace: intent === 'classic' ? 0.6 : 0.8, 'Bracelet / Watch': 0.4, Ring: 0.2 };
+  const first = pickBest(cands, j => base(j) + kindPref[jewelKind(j)], avoid, 0.8);
+  if (!first) return [];
+  const m = metalOf(first), unmatched = /Effortless/.test(mood.key);
+  const second = pickBest(cands.filter(j => jewelKind(j) !== jewelKind(first) && (unmatched || !m || !metalOf(j) || metalOf(j) === m)),
+    j => base(j), avoid, 0.8);
+  return second ? [first, second] : [first];
+}
+
 function completeOutfit(core, items, mood, intent, avoid) {
   const o = emptyOutfit();
   core.forEach(c => placeCore(o, c));
@@ -597,7 +658,7 @@ function completeOutfit(core, items, mood, intent, avoid) {
     if (o.top.length && !o.bottom) {
       o.bottom = pickBest(notCore(pool('bottom')), b => proportionScore(o.top[0], b, intent) * 1.3 + pairScore(o.top[0], b, mood, intent), avoid);
     } else if (o.bottom && !o.top.length) {
-      const t = pickBest(notCore(pool('top')), t => proportionScore(t, o.bottom, intent) * 1.3 + pairScore(t, o.bottom, mood, intent), avoid);
+      const t = pickBest(notCore(pool('top')), t => proportionScore(t, o.bottom, intent) * 1.3 + pairScore(t, o.bottom, mood, intent) + mainTopBonus(t), avoid);
       if (t) o.top.push(t);
     } else if (!o.top.length && !o.bottom) {
       const dresses = pool('dress'), tops = pool('top'), bottoms = pool('bottom');
@@ -615,15 +676,22 @@ function completeOutfit(core, items, mood, intent, avoid) {
   const base = o.dress || o.bottom || o.top[0];
   const anchor = o.bottom || o.dress || o.top[0];
 
-  // Editorial look gets a layering piece when it already has top + bottom: a second, different top worn as a layer.
-  if (intent === 'editorial' && !o.dress && o.top.length === 1 && o.bottom) {
-    // only pieces that can physically be layered with the first top (no thick-on-thick, no thin over thick)
-    const layer = pickBest(
-      notCore(pool('top')).filter(t => t.id !== o.top[0].id && (t.subtype || '').match(/Cardigan|Blazer|Sweater|Knit|Vest/i) && layerPair(o.top[0], t).ok),
-      t => pairScore(t, o.top[0], mood, 'editorial') + layerPair(o.top[0], t).penalty + (t.silhouette === 'Relaxed' || t.silhouette === 'Voluminous' ? 0.8 : 0),
-      avoid, 0.8
-    );
-    if (layer) o.top.push(layer);
+  // Layering: a blouse under a knit, a knit or cardigan over a blouse, or blouse → thin sweater → cardigan.
+  // The classic look adds one layer in the cold months (or over a sleeveless base); the editorial one goes up to three.
+  if (!o.dress && o.top.length && o.bottom) {
+    const maxTops = intent === 'editorial' ? (COLD ? 3 : 2) : (COLD || isSleeveless(o.top[0]) ? 2 : 1);
+    while (o.top.length < maxTops) {
+      const visible = o.top[o.top.length - 1];
+      const layer = pickBest(
+        notCore(pool('top')).filter(t => !o.top.some(x => x.id === t.id) && orderStack([...o.top, t]).ok),
+        t => pairScore(t, visible, mood, intent) + o.top.reduce((n, x) => n + layerPair(x, t).penalty, 0)
+          + (COLD && fabricInfo(t.fabric)?.warmth === 'warm' ? 0.6 : 0)
+          + (intent === 'editorial' && (t.silhouette === 'Relaxed' || t.silhouette === 'Voluminous') ? 0.8 : 0),
+        avoid, 0.8
+      );
+      if (!layer) break;
+      o.top = orderStack([...o.top, layer]).tops;
+    }
   }
 
   if (!o.outer && pool('outer').length && base) {
@@ -634,8 +702,7 @@ function completeOutfit(core, items, mood, intent, avoid) {
   if (!o.shoes && pool('shoes').length && base) {
     o.shoes = pickBest(pool('shoes'), s => harmony(s.color?.hex, anchor.color?.hex) + (intent === 'classic' && s.contrast === 'Dark' ? 1 : 0) + vibeScore(s, mood) + learnedPair(s, anchor), avoid, 0.7);
   }
-  // order two tops so the base layer comes first and the outer layer second
-  if (o.top.length === 2) { const lp = layerPair(o.top[0], o.top[1]); o.top = [lp.inner, lp.outer]; }
+  o.jewelry = pickJewelry(o, items, mood, intent, avoid);
   return o;
 }
 
@@ -677,7 +744,9 @@ function nm(i) { return i ? i.name : ''; }
 function lc(s) { return (s || '').toLowerCase(); }
 
 function proportionNote(o, intent) {
-  const tops = o.top, top = tops[tops.length - 1], bottom = o.bottom, dress = o.dress;   // the visible top is the outer layer
+  const tops = o.top, bottom = o.bottom, dress = o.dress;
+  // the piece that meets the waistband: the outermost top that is not an open cardigan or blazer
+  const top = [...tops].reverse().find(t => layerLevel(t) < 2) || tops[tops.length - 1];
   const lines = [];
   if (dress) {
     lines.push(dress.silhouette === 'Fitted'
@@ -702,8 +771,19 @@ function proportionNote(o, intent) {
   } else if (bottom) {
     lines.push(`Build around ${nm(bottom)}: a fitted or neatly tucked top keeps the proportions clean.`);
   }
-  if (tops.length > 1) lines.push(`Layer ${nm(tops[1])} over ${nm(tops[0])} — worn open or draped over the shoulders — so the neckline of the first piece still shows.`);
+  if (tops.length > 1) lines.push(layeringLine(tops));
   return lines.join(' ');
+}
+
+function layeringLine(tops) {
+  const inner = tops[0], outer = tops[tops.length - 1];
+  const lvl = layerLevel(outer);
+  if (tops.length === 3)
+    return `Build it in three: ${nm(inner)} as the base with the collar and cuffs pulled out, ${nm(tops[1])} over it, then ${nm(outer)} worn open on top.`;
+  if (lvl === 2) return `Wear ${nm(outer)} open or loosely buttoned over ${nm(inner)}, so the piece underneath still shows at the neckline.`;
+  if (lvl === 3) return `Put ${nm(outer)} over ${nm(inner)} and push the sleeves up a little so the layer underneath peeks out.`;
+  if (isSleeveless(outer)) return `${nm(outer)} goes over ${nm(inner)} — the sleeves and collar of the base piece do the work.`;
+  return `Wear ${nm(inner)} under ${nm(outer)} and let the collar and cuffs peek out at the neck and wrists.`;
 }
 
 function contrastNote(o) {
@@ -761,10 +841,19 @@ function beltNote(finish, o, intent) {
     : 'No belt needed — let the drape and the half-tuck define you.';
 }
 
-function jewelryNote(finish, mood, intent, o) {
-  const j = finish.jewelry;
-  if (j) return `${nm(j)} is the single focal accent; keep every other metal quiet so it sings.`;
-  const neck = (o.dress || o.top[0])?.subtype || '';
+function jewelryNote(mood, o) {
+  const js = o.jewelry || [];
+  const neckItem = o.dress || o.top[0];
+  const neck = neckItem?.subtype || '';
+  if (js.length) {
+    const m = metalOf(js[0]);
+    let t = js.length > 1
+      ? `${listText(js.map(nm))}${m && js.every(j => metalOf(j) === m) ? ` — all ${m}, so they read as a set` : ' — one is the focal piece, the other stays quiet'}.`
+      : `${nm(js[0])} as the single accent; keep every other metal quiet.`;
+    if (isHighNeck(neckItem)) t += ' With a high neckline, skip the necklace.';
+    else if (js.some(j => jewelKind(j) === 'Necklace') && /sweater|knit|cardigan/i.test(neck)) t += ' Wear the necklace over the knit, not tucked under it.';
+    return t;
+  }
   return `${mood.jewelry.charAt(0).toUpperCase() + mood.jewelry.slice(1)}${/sweater|knit/i.test(neck) ? '. Keep pieces short so they sit above a knit neckline' : ''}.`;
 }
 
@@ -815,7 +904,7 @@ function diaryNote(pieces) {
 
 function buildLookObject(title, tagline, outfit, finish, mood, intent) {
   const pieces = outfitPieces(outfit);
-  const accessories = ['legwear', 'belt', 'jewelry', 'hair', 'nails', 'makeup', 'perfume'].map(k => finish[k]).filter(Boolean);
+  const accessories = [...['legwear', 'belt'].map(k => finish[k]), ...(outfit.jewelry || []), ...['hair', 'nails', 'makeup', 'perfume'].map(k => finish[k])].filter(Boolean);
   const notes = [
     { label: 'From your outfit diary', text: diaryNote(pieces) },
     { label: 'Proportion & tuck', text: proportionNote(outfit, intent) },
@@ -824,7 +913,7 @@ function buildLookObject(title, tagline, outfit, finish, mood, intent) {
     { label: 'Layering',          text: layerNote(outfit, mood) },
     { label: 'Legwear',           text: finish.legwear ? `${nm(finish.legwear)} links the shoes to the hem — keep it close to the ${finish.legwear.color?.name ? finish.legwear.color.name.toLowerCase() : 'palette'} of the look.` : '' },
     { label: 'Belt',              text: beltNote(finish, outfit, intent) },
-    { label: 'Jewelry',           text: jewelryNote(finish, mood, intent, outfit) },
+    { label: 'Jewelry',           text: jewelryNote(mood, outfit) },
     { label: 'Hair',              text: hairNote(finish, mood, intent) },
     { label: 'Nails',             text: nailsNote(finish, mood, intent) },
     { label: 'Makeup',            text: makeupNote(finish, mood) },
@@ -844,17 +933,22 @@ function buildLookObject(title, tagline, outfit, finish, mood, intent) {
  * Build exactly two looks.
  * items: all closet items. coreIds: >=1 chosen item ids. finish: { belt, jewelry, hair, nails, makeup, perfume } (items or null).
  */
-export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {}, history = null }) {
+export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {}, history = null, month = new Date().getMonth() }) {
   LEARN = history;
+  COLD = [9, 10, 11, 0, 1, 2, 3].includes(month);
   const core = coreIds.map(id => items.find(i => i.id === id)).filter(Boolean);
   if (!core.length) return { error: 'Pick at least one core piece from your closet, or tap Surprise Me.' };
   const mood = interpretMood(moodText, moodChips || moodChip);
   const none = new Set();
 
-  const o1 = completeOutfit(core, items, mood, 'classic', none);
-  const used = new Set(outfitPieces(o1).map(i => i.id));
+  // a piece chosen under Finishing touches is the only jewelry offered; otherwise pick from the whole closet
+  const pool = finish.jewelry ? items.filter(i => i.category !== 'jewelry' || i.id === finish.jewelry.id) : items;
+  const o1 = completeOutfit(core, pool, mood, 'classic', none);
+  if (finish.jewelry && !o1.jewelry.length) o1.jewelry = [finish.jewelry];
+  const used = new Set([...outfitPieces(o1), ...o1.jewelry].map(i => i.id));
   core.forEach(c => used.delete(c.id));
-  const o2 = completeOutfit(core, items, mood, 'editorial', used);
+  const o2 = completeOutfit(core, pool, mood, 'editorial', used);
+  if (finish.jewelry && !o2.jewelry.length) o2.jewelry = [finish.jewelry];
 
   const look1 = buildLookObject('The Polished Classic', 'Balanced proportions, a defined waist and light-to-dark contrast.', o1, finish, mood, 'classic');
   const look2 = buildLookObject('The Effortless Editorial', 'A distinct pairing with a cooler, more undone point of view.', o2, finish, mood, 'editorial');
