@@ -387,6 +387,7 @@ export function autoName(catId, colorNm, subtype) {
 
 const MOOD_PROFILES = {
   'Quiet Luxury': {
+    level: 3.4,
     perfume: ['Elegant', 'Clean', 'Calm'],
     feeling: 'composed, expensive-feeling and calm',
     vibes: ['Old-Money', 'Elevated', 'Minimal', 'Classic'], tonal: true,
@@ -397,6 +398,7 @@ const MOOD_PROFILES = {
     texture: 'fine wool, cashmere and crisp tailoring'
   },
   'Cozy & Polished': {
+    level: 2.9,
     perfume: ['Cozy', 'Calm', 'Elegant'],
     feeling: 'warm, held and effortlessly put-together',
     vibes: ['Cozy', 'Elevated', 'Casual', 'Preppy', 'Classic'], tonal: true,
@@ -407,6 +409,7 @@ const MOOD_PROFILES = {
     texture: 'brushed knits, wool and soft suede'
   },
   'Effortless Chic': {
+    level: 2.6,
     perfume: ['Fresh & Sunny', 'Clean', 'Playful'],
     feeling: 'relaxed, a little undone and quietly cool',
     vibes: ['Effortless Chic', 'Old-Money', 'Casual', 'Bohemian', 'Sporty-Luxe', 'Vintage', 'Streetwear'], tonal: false,
@@ -417,6 +420,7 @@ const MOOD_PROFILES = {
     texture: 'washed cotton, linen and draped jersey'
   },
   'Sharp & Confident': {
+    level: 3.8,
     perfume: ['Confident', 'Mysterious', 'Sensual'],
     feeling: 'precise, powerful and in charge',
     vibes: ['Elevated', 'Old-Money', 'Edgy', 'Evening', 'Preppy', 'Office', 'Glam'], tonal: false,
@@ -427,6 +431,7 @@ const MOOD_PROFILES = {
     texture: 'structured wool, leather and sharp tailoring'
   },
   'Soft & Romantic': {
+    level: 3.2,
     perfume: ['Romantic', 'Sensual', 'Playful'],
     feeling: 'tender, graceful and quietly romantic',
     vibes: ['Effortless Chic', 'Cozy', 'Romantic', 'Bohemian', 'Evening', 'Vintage'], tonal: true,
@@ -465,6 +470,7 @@ export function interpretMood(text = '', chips = []) {
     feeling: profs.length > 1 ? `${profs[0].feeling} — with notes of ${profs.slice(1).map(p => p.feeling).join(' and ')}` : profs[0].feeling,
     vibes: uniq(profs.flatMap(p => p.vibes)),
     perfume: uniq(profs.flatMap(p => p.perfume)),
+    level: profs.reduce((t, p) => t + p.level, 0) / profs.length,
     tonal: profs.some(p => p.tonal),
     hair: uniq(profs.flatMap(p => p.hair)),
     makeup: profs[0].makeup,
@@ -542,9 +548,9 @@ const slotOf = i => categoryById(i?.category)?.slot;
 const RECENT_MS = 5 * 864e5;
 
 /** Turn the outfit diary into a scoring model. wears: diary records; items: the closet. */
-export function learnFromWears(wears = [], items = []) {
+export function learnFromWears(wears = [], items = [], votes = []) {
   const byId = new Map(items.map(i => [i.id, i]));
-  const m = { pair: new Map(), item: new Map(), shape: new Map(), colour: new Map(), recent: new Set(), wears: [] };
+  const m = { pair: new Map(), item: new Map(), shape: new Map(), colour: new Map(), recent: new Set(), lastWorn: new Map(), wears: [] };
   const add = (map, k, v) => map.set(k, (map.get(k) || 0) + v);
   const now = Date.now();
   for (const w of wears) {
@@ -558,6 +564,7 @@ export function learnFromWears(wears = [], items = []) {
     const focused = set => userTags.filter(t => set.has(t)).reduce((s, t) => s + tagWeight(t), 0)
       + 0.5 * aiTags.filter(t => set.has(t)).reduce((s, t) => s + tagWeight(t), 0);
     const recent = now - (w.wornAt || 0) < RECENT_MS;
+    pieces.forEach(p => { if ((w.wornAt || 0) > (m.lastWorn.get(p.id) || 0)) m.lastWorn.set(p.id, w.wornAt || 0); });
 
     for (let i = 0; i < pieces.length; i++) {
       add(m.item, pieces[i].id, overall / pieces.length);
@@ -577,11 +584,32 @@ export function learnFromWears(wears = [], items = []) {
     }
     m.wears.push({ w, pieces, overall });
   }
+  // quick 👍 / 👎 on suggested looks: weaker than a real wear, but enough to steer the next suggestions
+  for (const v of votes) {
+    const pieces = (v.pieceIds || []).map(id => byId.get(id)).filter(Boolean);
+    if (pieces.length < 2 || !v.vote) continue;
+    const w = v.vote > 0 ? 0.9 : -1.4;
+    for (let i = 0; i < pieces.length; i++) {
+      add(m.item, pieces[i].id, w / pieces.length / 2);
+      for (let j = i + 1; j < pieces.length; j++) add(m.pair, pairKey(pieces[i].id, pieces[j].id), w * 2 / pieces.length);   // spread over the pairs: it is the combination that was (dis)liked
+    }
+  }
   m.wears.sort((a, b) => (b.w.wornAt || 0) - (a.w.wornAt || 0));
   return m;
 }
 
 let LEARN = null;   // set for the duration of buildLooks
+let JIT = 1;
+let WARM = false;        // how much randomness pickBest adds: 0 = the single best choice, higher = more variety
+let CORE_IDS = new Set();
+
+/** Like a person skipping what they wore a day or two ago: pieces worn very recently are pushed back (not the chosen core). */
+function rotation(c) {
+  if (!LEARN || !c || CORE_IDS.has(c.id)) return 0;
+  const t = LEARN.lastWorn.get(c.id); if (!t) return 0;
+  const days = (Date.now() - t) / 864e5;
+  return days < 2.5 ? -2 : days < 5 ? -0.8 : 0;
+}
 
 function learnedPair(a, b) {
   if (!LEARN || !a || !b) return 0;
@@ -619,7 +647,7 @@ function outfitPieces(o) {
 function pickBest(cands, scoreFn, avoid, jitter = 0.5) {
   let best = null, bs = -Infinity;
   for (const c of cands) {
-    let s = scoreFn(c) + learnedItem(c) + Math.random() * jitter;
+    let s = scoreFn(c) + learnedItem(c) + rotation(c) + Math.random() * jitter * JIT;
     if (avoid.has(c.id)) s -= 6;
     if (s > bs) { bs = s; best = c; }
   }
@@ -1013,30 +1041,203 @@ function buildLookObject(title, tagline, outfit, finish, mood, intent) {
     mood: mood.key,
     itemIds: [...pieces, ...accessories].map(i => i.id),
     pieceIds: pieces.map(i => i.id),
+    key: outfitKey(outfit),
     notes
   };
+}
+
+/* ---------- Thinking like a person getting dressed ----------
+   1. Context first: the occasion (or the core piece) sets how dressy the outfit is, the season sets what is out.
+   2. The core piece is the hero; its colours start the colour story.
+   3. Everything else must fit that story and the same dressiness.
+   4. Skip what was worn a day or two ago.
+   5. Mirror check: build many complete outfits and judge each one as a whole, keeping the best. */
+
+export const DRESSINESS = ['Lounge', 'Casual', 'Smart casual', 'Smart', 'Dressy'];
+export const OCCASIONS = [
+  { id: 'home',     label: 'Home & errands', target: 1.6 },
+  { id: 'everyday', label: 'Everyday',       target: 2.5 },
+  { id: 'work',     label: 'Work',           target: 3.4 },
+  { id: 'dinner',   label: 'Dinner / date',  target: 3.8 },
+  { id: 'event',    label: 'Event',          target: 4.6 }
+];
+const DRESS_BASE = {
+  'Tee / Tank': 1.9, 'Sweater / Knit': 2.6, 'Sleeveless Sweater / Vest': 2.6, 'Turtleneck': 3, 'Blouse / Shirt': 3.2, 'Bodysuit': 2.6,
+  'Corset / Bustier': 3.6, 'Cardigan': 2.5, 'Blazer / Jacket': 4,
+  'Skirt': 3.1, 'Trousers': 3.5, 'Jeans': 2.2, 'Shorts': 1.5, 'Leggings': 1.2, 'Culottes': 3, 'Cargo / Utility': 1.6,
+  'Mini': 3, 'Midi': 3.5, 'Maxi': 3.2, 'Slip': 4, 'Wrap': 3.5, 'Shirt dress': 3, 'Knit dress': 3,
+  'Coat': 4, 'Trench': 3.8, 'Puffer': 1.8, 'Jacket': 2.6, 'Leather jacket': 2.6, 'Cape / Poncho': 3.4, 'Gilet': 2,
+  'Boots': 3, 'Ankle boots': 3.1, 'Loafers': 3.4, 'Heels': 4.5, 'Flats': 3, 'Sneakers': 1.6, 'Sandals': 2.6, 'Mules': 3.4
+};
+const DRESS_FABRIC = { Satin: 1, Silk: 0.8, Velvet: 0.8, Lace: 0.6, 'Sequin / Metallic': 1.2, Chiffon: 0.5, Cashmere: 0.4, Tweed: 0.3,
+  Denim: -0.3, Fleece: -1, 'Jersey / Knit': -0.3, Canvas: -0.4, Corduroy: -0.2, 'Padded / Down': -0.3, Acrylic: -0.2, Linen: -0.2 };
+const DRESS_VIBE = { Evening: 0.8, Glam: 0.8, Office: 0.4, Elevated: 0.3, 'Old-Money': 0.3, Classic: 0.2,
+  Casual: -0.5, Cozy: -0.4, Streetwear: -0.6, 'Sporty-Luxe': -0.4, Bohemian: -0.2 };
+const DRESS_NAME = [[/\b(sweat|hoodie|jogger|track)/i, -1.2], [/\b(tailored|pleated|pencil|pressed)/i, 0.4], [/\b(oversized|ripped|distressed|graphic)/i, -0.5]];
+
+/** 1 (lounge) … 5 (dressy), worked out from the type, fabric, vibe and name. */
+export function defaultDressiness(item) { return Math.max(1, Math.min(5, Math.round(dressinessRaw(item)))); }
+function dressinessRaw(item) {
+  const cat = item?.category;
+  let n = DRESS_BASE[item?.subtype] ?? ({ tops: 2.6, bottoms: 2.8, dresses: 3.3, outerwear: 3, shoes: 2.8 }[cat] ?? 3);
+  const fi = fabricInfo(item?.fabric); if (fi) n += DRESS_FABRIC[fi.label] || 0;
+  const vibes = item?.vibe || [];
+  if (vibes.length) n += vibes.reduce((t, v) => t + (DRESS_VIBE[v] || 0), 0) / vibes.length;
+  DRESS_NAME.forEach(([re, d]) => { if (re.test(item?.name || '')) n += d; });
+  return Math.max(1, Math.min(5, n));
+}
+/** The piece's dressiness: set by the user, or worked out. */
+export function dressinessOf(item) {
+  const own = DRESSINESS.indexOf(item?.dressiness) + 1;
+  return own || dressinessRaw(item);
+}
+
+/** Season rules a person would not break: no sandals or shorts in the cold, no heavy coats in summer. */
+const WARM_MONTHS = [4, 5, 6, 7, 8];
+function seasonOK(i, warm) {
+  const s = `${i.subtype || ''} ${i.name || ''}`;
+  if (COLD && /\b(sandals?|shorts)\b/i.test(s)) return false;
+  if (COLD && i.category === 'tops' && /tee|tank|cami/i.test(s) && isSleeveless(i)) return true;   // fine as a base layer
+  if (warm && (/\b(puffer|coat|faux fur|shearling)\b/i.test(s) || (i.category !== 'shoes' && thicknessOf(i) === 3))) return false;
+  if (warm && /\b(boots?)\b/i.test(s) && !/ankle/i.test(s)) return false;
+  if (warm && i.category === 'tops' && /sweater|knit|turtleneck|cardigan/i.test(s) && fabricInfo(i.fabric)?.warmth === 'warm') return false;
+  return true;
+}
+
+const NEUTRAL_NAMES = new Set(['ivory', 'cream', 'white', 'oatmeal', 'beige', 'camel', 'tan', 'sand', 'taupe', 'chocolate', 'brown', 'espresso',
+  'black', 'charcoal', 'grey', 'light grey', 'pale grey', 'navy', 'stone', 'khaki', 'mocha', 'denim blue', 'silver', 'gold']);
+function isNeutralPiece(i) {
+  const n = lc(i?.color?.name);
+  if (NEUTRAL_NAMES.has(n)) return true;
+  const hex = i?.color?.hex; if (!hex) return true;
+  const { r, g, b } = hexToRgb(hex); const { s, l } = rgbToHsl(r, g, b);
+  return isNeutral(hex) || s < 0.16 || l < 0.12 || l > 0.93;
+}
+/** Colour families of the accents (non-neutrals): hue buckets, so rust and terracotta count as one colour. */
+function accentFamilies(pieces) {
+  const fam = new Set();
+  pieces.filter(p => !isNeutralPiece(p)).forEach(p => { const { r, g, b } = hexToRgb(p.color.hex); fam.add(Math.round(rgbToHsl(r, g, b).h / 30) % 12); });
+  return fam;
+}
+/** A colour story: neutrals plus at most one or two accents that get along. */
+function colourStoryScore(pieces, mood) {
+  const main = pieces.filter(Boolean);
+  if (main.length < 2) return 0;
+  const accents = main.filter(p => !isNeutralPiece(p)), fams = accentFamilies(main);
+  let s = 0;
+  if (fams.size === 0) s += mood.tonal ? 1.2 : 0.6;               // all neutrals: calm and easy
+  else if (fams.size === 1) s += 1.4;                              // one accent colour: the classic recipe
+  else if (fams.size === 2) {
+    const [a, b] = accents.slice(0, 2);
+    s += harmony(a.color.hex, b.color.hex) > 0.5 ? -0.6 : -2;   // two accents: only when they really get along
+  } else s -= 3 * (fams.size - 2);                                 // three or more accents: too many colours
+  if (accents.length === main.length) s -= 1.5;                     // no neutral to rest the eye
+  return s;
+}
+
+/** Every pair of pieces, not only each piece against one anchor. */
+function allPairs(pieces) { const out = []; for (let i = 0; i < pieces.length; i++) for (let j = i + 1; j < pieces.length; j++) out.push([pieces[i], pieces[j]]); return out; }
+
+/** The whole-outfit judgement: how well everything works together. */
+function outfitScore(o, mood, intent, target) {
+  const pieces = outfitPieces(o);
+  if (!pieces.length) return -Infinity;
+  const clothes = pieces.filter(p => p.category !== 'shoes');
+  let s = 0;
+  // dressiness: everything at the same level, and at the level the day asks for
+  // (the coat is left out: a casual knit under a smart coat is a normal high-low mix — a puffer over a dressy look is not)
+  const inner = pieces.filter(p => p !== o.outer);
+  const d = inner.map(dressinessOf), mean = d.reduce((a, b) => a + b, 0) / d.length;
+  const spread = Math.max(...d) - Math.min(...d);
+  if (o.outer) s -= Math.max(0, mean - 1 - dressinessOf(o.outer)) * 2;
+  s -= Math.max(0, spread - 1) * 1.4 + (spread >= 3 ? 2 : 0);   // a sneaker with a slip dress: only on purpose
+  s -= Math.abs(mean - target) * 1.2;
+  // colour story
+  s += colourStoryScore(clothes.concat(o.shoes ? [o.shoes] : []), mood) * 1.2;
+  // pairs: harmony, sheen and what the diary / votes taught
+  const pairs = allPairs(pieces);
+  if (pairs.length) s += pairs.reduce((t, [a, b]) => t + harmony(a.color?.hex, b.color?.hex) * 0.5 + sheenScore(a, b) + learnedPair(a, b) * 0.6, 0) / Math.sqrt(pairs.length);
+  // proportion and contrast of the main pairing
+  const top = o.top[o.top.length - 1];
+  if (top && o.bottom) s += proportionScore(top, o.bottom, intent) * 1.1 + contrastScore(top, o.bottom, intent) * 0.6;
+  // one shared vibe running through most of the outfit
+  const vc = {}; clothes.forEach(p => (p.vibe || []).forEach(v => { vc[v] = (vc[v] || 0) + 1; }));
+  const shared = Object.entries(vc).filter(([v, n]) => n >= Math.ceil(clothes.length / 2));
+  s += Math.min(2, shared.length * 0.6 + shared.filter(([v]) => mood.vibes.includes(v)).length * 0.5);
+  // layering and coat sit right
+  if (o.top.length > 1) s += o.top.reduce((t, x, i) => t + o.top.slice(i + 1).reduce((u, y) => u + layerPair(x, y).penalty, 0), 0);
+  if (o.outer) s += outerLayerPenalty(o.dress ? [o.dress] : o.top, o.outer);
+  // rotation
+  s += pieces.reduce((t, p) => t + rotation(p), 0);
+  // the classic look should feel finished: shoes are a must
+  if (!o.shoes) s -= 0.8;
+  if (o.outer && WARM && thicknessOf(o.outer) >= 2) s -= 1.2;   // summer: a coat only if it is light
+  if (WARM && o.top.length > 1 && o.top.some(t => fabricInfo(t.fabric)?.warmth === 'warm' || thicknessOf(t) >= 2)) s -= 2;   // no knit layers in the heat
+  return s;
+}
+
+const outfitKey = o => outfitPieces(o).map(p => p.id).sort().join('|');
+
+/** Build many complete outfits and keep the best few, judged as a whole. */
+function mirrorCheck(core, pool, mood, intent, avoid, target, shown = new Set(), n = 36) {
+  const seen = new Map(), skipped = [];
+  for (let k = 0; k < n; k++) {
+    JIT = k === 0 ? 0 : 1 + k / 8;                            // first try: the single best choice each step; then wider variations
+    const o = completeOutfit(core, pool, mood, intent, avoid);
+    const key = outfitKey(o);
+    if (seen.has(key)) continue;
+    if (shown.has(key)) { skipped.push(o); continue; }         // Restyle: already shown, look further
+    const overlap = outfitPieces(o).filter(p => avoid.has(p.id)).length;
+    seen.set(key, { o, score: outfitScore(o, mood, intent, target) - overlap * 2 });
+  }
+  JIT = 1;
+  if (!seen.size && skipped.length) skipped.forEach(o => seen.set(outfitKey(o), { o, score: outfitScore(o, mood, intent, target) }));
+  return [...seen.values()].sort((a, b) => b.score - a.score);
 }
 
 /**
  * Build exactly two looks.
  * items: all closet items. coreIds: >=1 chosen item ids. finish: { belt, jewelry, hair, nails, makeup, perfume } (items or null).
  */
-export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {}, history = null, month = new Date().getMonth() }) {
+export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {}, history = null, occasion = '', shown = [], month = new Date().getMonth() }) {
   LEARN = history;
   COLD = [9, 10, 11, 0, 1, 2, 3].includes(month);
+  const warm = WARM = WARM_MONTHS.includes(month);
   const core = coreIds.map(id => items.find(i => i.id === id)).filter(Boolean);
   if (!core.length) return { error: 'Pick at least one core piece from your closet, or tap Surprise Me.' };
+  CORE_IDS = new Set(core.map(c => c.id));
   const mood = interpretMood(moodText, moodChips || moodChip);
   const none = new Set();
 
+  // 1. context: how dressy today is — the occasion if one was picked, otherwise the hero piece sets the level
+  const occ = OCCASIONS.find(o => o.id === occasion);
+  const coreLevel = core.reduce((t, c) => t + dressinessOf(c), 0) / core.length;
+  const target = occ ? occ.target * 0.6 + coreLevel * 0.25 + mood.level * 0.15 : coreLevel * 0.5 + mood.level * 0.5;
+  // hard filters a person would apply before even looking: wrong season, or far too casual / too dressy
+  const fits = i => CORE_IDS.has(i.id) || !CLOTHING_SLOTS.has(slotOf(i)) || (seasonOK(i, warm) && Math.abs(dressinessOf(i) - target) <= 1.75);
+  let base = items.filter(fits);
+  // never leave a slot empty because of the filters: fall back to the season-only filter, then everything
+  for (const slot of ['top', 'bottom', 'shoes']) {          // a coat is optional: no fallback for it
+    if (!base.some(i => slotOf(i) === slot) && items.some(i => slotOf(i) === slot)) {
+      const loose = items.filter(i => slotOf(i) === slot && seasonOK(i, warm));
+      base = base.concat(loose.length ? loose : items.filter(i => slotOf(i) === slot));
+    }
+  }
+  const warnings = [];
+  if (occ && Math.abs(coreLevel - occ.target) > 1.5)
+    warnings.push(`${listText(core.map(nm))} ${core.length > 1 ? 'are' : 'is'} ${coreLevel < occ.target ? 'more casual' : 'dressier'} than “${occ.label}” usually asks for — the rest of the look meets it halfway.`);
+
   // a piece chosen under Finishing touches is the only jewelry offered; otherwise pick from the whole closet
-  const pool = finish.jewelry ? items.filter(i => i.category !== 'jewelry' || i.id === finish.jewelry.id) : items;
-  const o1 = completeOutfit(core, pool, mood, 'classic', none);
-  if (finish.jewelry && !o1.jewelry.length) o1.jewelry = [finish.jewelry];
+  const pool = finish.jewelry ? base.filter(i => i.category !== 'jewelry' || i.id === finish.jewelry.id) : base;
+
+  // 5. mirror check: many complete outfits, judged whole
+  const shownKeys = new Set(shown);
+  const c1 = mirrorCheck(core, pool, mood, 'classic', none, target + 0.3, shownKeys);   // the classic look leans a touch more polished
+  const o1 = c1[0].o;
   const used = new Set([...outfitPieces(o1), ...o1.jewelry].map(i => i.id));
   core.forEach(c => used.delete(c.id));
-  const o2 = completeOutfit(core, pool, mood, 'editorial', used);
-  if (finish.jewelry && !o2.jewelry.length) o2.jewelry = [finish.jewelry];
+  const c2 = mirrorCheck(core, pool, mood, 'editorial', used, target - 0.2, shownKeys);
+  const fixJewel = o => { if (finish.jewelry && !o.jewelry.length) o.jewelry = [finish.jewelry]; return o; };
 
   // no perfume chosen: suggest one from the shelf that matches the mood (a different one per look when there is a choice)
   const scent = (avoid) => { if (finish.perfume) return finish; const p = pickPerfume(items, mood, avoid); return p ? { ...finish, perfume: p, perfumeAuto: true } : finish; };
@@ -1045,9 +1246,19 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodC
   const fitsMood = p => perfumeMoodsOf(p).some(m => mood.perfume.includes(m));
   if (f2.perfumeAuto && f1.perfumeAuto && !fitsMood(f2.perfume) && fitsMood(f1.perfume)) f2 = f1;   // a second scent only if it suits the mood too
 
-  const look1 = buildLookObject('The Polished Classic', 'Balanced proportions, a defined waist and light-to-dark contrast.', o1, f1, mood, 'classic');
-  const look2 = buildLookObject('The Effortless Editorial', 'A distinct pairing with a cooler, more undone point of view.', o2, f2, mood, 'editorial');
-  return { mood: mood.key, feeling: mood.feeling, warnings: o1.warnings, looks: [look1, look2] };
+  const T1 = ['The Polished Classic', 'Balanced proportions, a defined waist and light-to-dark contrast.'];
+  const T2 = ['The Effortless Editorial', 'A distinct pairing with a cooler, more undone point of view.'];
+  const mk = (c, T, f, intent) => buildLookObject(T[0], T[1], fixJewel(c.o), f, mood, intent);
+  const look1 = mk(c1[0], T1, f1, 'classic');
+  const look2 = mk(c2[0], T2, f2, 'editorial');
+  // the next-best options, for an AI stylist to choose from
+  const alternatives = {
+    classic: [look1, ...c1.slice(1, 5).map(c => mk(c, T1, f1, 'classic'))],
+    editorial: [look2, ...c2.slice(1, 5).map(c => mk(c, T2, f2, 'editorial'))]
+  };
+  CORE_IDS = new Set();
+  return { mood: mood.key, feeling: mood.feeling, occasion: occ?.label || '', season: COLD ? 'cold months' : warm ? 'warm months' : 'mild weather',
+    level: DRESSINESS[Math.max(0, Math.min(4, Math.round(target) - 1))], warnings: [...new Set([...o1.warnings, ...warnings])], looks: [look1, look2], alternatives };
 }
 
 /* ======================================================================

@@ -555,3 +555,39 @@ export async function describePiece({ key, model = DEFAULT_MODEL, photo }) {
     scents: scentsOf({ scentMood: o.scents || [] }).slice(0, 5)
   };
 }
+
+/* ======================================================================
+   Studio judge — the app builds the best few complete outfits by its own rules; the AI picks the one a stylist would choose
+   ====================================================================== */
+
+const PICK = { type: 'OBJECT', properties: { id: { type: 'STRING' }, why: { type: 'STRING', description: 'One or two sentences: why this one works best today.' } }, required: ['id', 'why'] };
+const JUDGE_SCHEMA = { type: 'OBJECT', properties: { classic: PICK, editorial: PICK }, required: ['classic', 'editorial'] };
+
+/** alternatives: { classic: [look], editorial: [look] } with look.pieceIds. Returns { classic: { id, why }, editorial: { id, why } }. */
+export async function judgeLooks({ key, model = DEFAULT_MODEL, alternatives, closet = [], profile, mood, feeling, occasion, season, signal }) {
+  if (!key) throw new Error('Add your Gemini key in Profile first.');
+  const byId = new Map(closet.map(i => [i.id, i]));
+  const list = looks => looks.map(l => `${l.id}:\n${closetLines(l.pieceIds.map(id => byId.get(id)).filter(Boolean)).replace(/^/gm, '  ')}`).join('\n');
+  const prompt = [
+    'You are the personal stylist inside Fashon. The app has already built complete outfits from the person\'s own closet, following its rules.',
+    'Choose the one outfit from each list that a good stylist would actually send them out in today — judge each outfit as a whole:',
+    'does it look intentional, are the pieces at the same level of dressiness, is there a clear colour story, is it right for the season and occasion?',
+    todayLine(),
+    `Mood: ${mood} (${feeling}). ${occasion ? `Occasion: ${occasion}.` : 'No occasion given.'} Season: ${season}.`,
+    'ABOUT THE PERSON', profileLines(profile),
+    '',
+    'LIST A — "The Polished Classic" (balanced, defined, light-to-dark):', list(alternatives.classic),
+    '',
+    'LIST B — "The Effortless Editorial" (cooler, more undone):', list(alternatives.editorial),
+    '',
+    RULES,
+    'Answer with the exact ids. "why" speaks to the person directly, warm and specific, no more than two sentences.'
+  ].join('\n');
+  const { text } = await generate(key, model, {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json', responseSchema: JUDGE_SCHEMA, temperature: 0.3 }
+  }, signal);
+  const o = parseJSON(text, 'choice');
+  const pick = (p, looks) => looks.some(l => l.id === p?.id) ? { id: p.id, why: str(p.why) } : null;
+  return { classic: pick(o.classic, alternatives.classic), editorial: pick(o.editorial, alternatives.editorial) };
+}

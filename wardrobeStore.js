@@ -14,7 +14,8 @@ const LS = {
   moods: 'qc.moods.v1',
   wears: 'qc.wears.v1',
   ai: 'qc.ai.v1',
-  chat: 'qc.chat.v1'
+  chat: 'qc.chat.v1',
+  votes: 'qc.votes.v1'
 };
 const DB_NAME = 'quiet-closet';
 const DB_VERSION = 1;
@@ -90,6 +91,17 @@ export async function deleteWear(id) {
   write(LS.wears, getWears().filter(w => w.id !== id));
   revokePhotoURL(id);
   try { await deletePhoto(id); } catch (e) { console.warn(e); }
+}
+
+/* ---------- Quick 👍 / 👎 on suggested looks: { id (outfit key), pieceIds, vote: 1 | -1, at } — teaches the Studio your taste ---------- */
+
+export function getVotes() { return read(LS.votes, []); }
+export function voteOf(key) { return getVotes().find(v => v.id === key)?.vote || 0; }
+/** vote 0 removes it. */
+export function setVote(key, pieceIds, vote) {
+  const list = getVotes().filter(v => v.id !== key);
+  if (vote) list.push({ id: key, pieceIds, vote, at: Date.now() });
+  return write(LS.votes, list.slice(-300));
 }
 
 /* ---------- AI stylist settings: { key, model }. Stays on this device and is never put in a backup. ---------- */
@@ -305,7 +317,7 @@ export async function createBackup() {
     if (!w.hasPhoto) continue;
     try { const b = await getPhoto(w.id); if (b) photos[w.id] = await blobToDataURL(b); } catch (e) { console.warn('wear photo skipped', w.id, e); }
   }
-  const data = { app: 'quiet-closet', version: BACKUP_VERSION, exportedAt: new Date().toISOString(), items, profile: read(LS.profile, {}), looks: getLooks(), checks: getChecks(), moods: getCustomMoods(), wears, photos };
+  const data = { app: 'quiet-closet', version: BACKUP_VERSION, exportedAt: new Date().toISOString(), items, profile: read(LS.profile, {}), looks: getLooks(), checks: getChecks(), moods: getCustomMoods(), wears, votes: getVotes(), photos };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   return { blob, filename: `quiet-closet-backup-${new Date().toISOString().slice(0, 10)}.json`, count: items.length };
 }
@@ -313,8 +325,8 @@ export async function createBackup() {
 /** Plain-text/CSV list of the closet (no photos) for reading in Numbers/Excel. */
 export function createCSV() {
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const head = ['Name', 'Category', 'Type', 'Colour', 'Hex', 'Contrast', 'Silhouette', 'Thickness', 'Sleeves', 'Vibe', 'Scent accords', 'Fabric', 'Composition', 'Notes'];
-  const rows = getItems().map(i => [i.name, i.category, i.subtype, i.color?.name, i.color?.hex, i.contrast, i.silhouette, i.thickness, i.sleeves, (i.vibe || []).join('; '), scentsOf(i).join('; '), i.fabric, i.fabricMix, i.notes].map(q).join(','));
+  const head = ['Name', 'Category', 'Type', 'Colour', 'Hex', 'Contrast', 'Silhouette', 'Thickness', 'Sleeves', 'Dressiness', 'Vibe', 'Scent accords', 'Fabric', 'Composition', 'Notes'];
+  const rows = getItems().map(i => [i.name, i.category, i.subtype, i.color?.name, i.color?.hex, i.contrast, i.silhouette, i.thickness, i.sleeves, i.dressiness, (i.vibe || []).join('; '), scentsOf(i).join('; '), i.fabric, i.fabricMix, i.notes].map(q).join(','));
   return { blob: new Blob([[head.map(q).join(','), ...rows].join('\n')], { type: 'text/csv' }), filename: 'quiet-closet-items.csv' };
 }
 
@@ -345,7 +357,7 @@ export async function restoreBackup(file, mode = 'merge') {
     const cur = read(key, []); const ids = new Set(cur.map(x => x.id));
     write(key, [...cur, ...(incoming || []).filter(x => !ids.has(x.id))]);
   };
-  mergeList(LS.looks, data.looks); mergeList(LS.checks, data.checks); mergeList(LS.moods, data.moods); mergeList(LS.wears, data.wears);
+  mergeList(LS.looks, data.looks); mergeList(LS.checks, data.checks); mergeList(LS.moods, data.moods); mergeList(LS.wears, data.wears); mergeList(LS.votes, data.votes);
   if (data.profile && Object.keys(data.profile).length && (mode === 'replace' || !Object.keys(read(LS.profile, {})).length)) write(LS.profile, data.profile);
   await preloadPhotos([...data.items.map(i => i.id), ...(data.wears || []).filter(w => w.hasPhoto).map(w => w.id)]);
   return { items: data.items.length, photos: photosRestored };

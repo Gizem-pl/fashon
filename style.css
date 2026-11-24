@@ -469,3 +469,7 @@ body.typing .composer { bottom: calc(10px + env(safe-area-inset-bottom)); }
   .page-head { padding-top: 40px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+.vote { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 14px 0 10px; font-size: 13px; }
+.vote span { opacity: .75; margin-right: auto; }
+.chip-group small { text-transform: none; letter-spacing: 0; }

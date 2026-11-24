@@ -34,7 +34,7 @@ const state = {
   items: [],
   closetFilter: 'all',
   studio: { core: new Set(), openCore: false, pickFilter: 'all', moodText: '', moodChips: [], finish: {}, result: null, openFinish: false,
-            seg: 'create', collapsed: false, addingMood: false },
+            seg: 'create', collapsed: false, addingMood: false, occasion: '', shown: [] },
   checker: { url: '', name: '', text: '', type: 'auto', fit: 'auto', kind: 'auto', color: null, report: null, activeId: null,
              product: null, shots: [], reading: false, ai: null, aiBusy: false, openManual: false },
   chat: { text: '', photo: null, photoUrl: '', busy: false, ctrl: null },
@@ -130,7 +130,7 @@ function studioCreateHTML() {
   const s = state.studio;
   if (s.result && !s.result.error && s.collapsed) {
     const core = [...s.core].map(itemById).filter(Boolean);
-    const moods = [...s.moodChips, s.moodText].filter(Boolean).join(' · ');
+    const moods = [...s.moodChips, s.moodText, E.OCCASIONS.find(o => o.id === s.occasion)?.label].filter(Boolean).join(' · ');
     return `
     <section class="card brief">
       <div class="mini">${core.slice(0, 4).map(i => `<span>${pic(i)}</span>`).join('')}</div>
@@ -163,6 +163,8 @@ function studioCreateHTML() {
       <h2 class="step"><span>02</span>Mood</h2>
       <input id="mood-text" type="text" inputmode="text" autocomplete="off" aria-label="How do you want to feel today?" placeholder="How do you want to feel? e.g. calm, warm, quietly confident" value="${esc(s.moodText)}">
       <div class="chips" id="mood-chips">${moodChipsHTML()}</div>
+      <p class="chip-group">Where to? <small>optional — sets how dressy the looks are</small></p>
+      <div class="chips" id="occasion-chips">${occasionChipsHTML()}</div>
       ${s.addingMood ? `
       <div class="add-mood">
         <input id="new-mood" type="text" autocomplete="off" maxlength="24" placeholder="Name it, e.g. Gallery opening">
@@ -191,6 +193,11 @@ function studioCreateHTML() {
     <p class="center"><button class="link" data-act="start-over">Start over</button></p>
 
     <div id="studio-results"></div>`;
+}
+
+function occasionChipsHTML() {
+  const cur = state.studio.occasion;
+  return E.OCCASIONS.map(o => `<button class="chip ${cur === o.id ? 'on' : ''}" data-act="occasion" data-id="${o.id}" aria-pressed="${cur === o.id}">${esc(o.label)}</button>`).join('');
 }
 
 function moodChipsHTML() {
@@ -251,8 +258,9 @@ function updateCoreSummary() {
     : `<em>Tap to choose</em>`;
 }
 
-function lookCard(look, idx, saved) {
+function lookCard(look, idx, saved, votable = false) {
   const pieces = look.itemIds.map(itemById).filter(Boolean);
+  const v = votable && look.key ? S.voteOf(look.key) : 0;
   return `
   <article class="look card" data-look-id="${look.id}">
     <header class="look-head">
@@ -265,6 +273,9 @@ function lookCard(look, idx, saved) {
     <dl class="notes">
       ${look.notes.map(n => `<div><dt>${esc(n.label)}</dt><dd>${esc(n.text)}</dd></div>`).join('')}
     </dl>
+    ${votable && look.key ? `<div class="vote" role="group" aria-label="Would you wear this?"><span>Would you wear this?</span>
+      <button class="chip ${v > 0 ? 'on' : ''}" data-act="vote" data-v="1" data-look-id="${look.id}" aria-pressed="${v > 0}">👍 Yes</button>
+      <button class="chip ${v < 0 ? 'on' : ''}" data-act="vote" data-v="-1" data-look-id="${look.id}" aria-pressed="${v < 0}">👎 Not me</button></div>` : ''}
     <button class="btn ghost wide" data-act="wore-look" data-look-id="${look.id}">I wore this · add a photo</button>
   </article>`;
 }
@@ -284,10 +295,11 @@ function renderResults() {
   if (!r) { box.innerHTML = ''; return; }
   if (r.error) { box.innerHTML = `<p class="note warn">${esc(r.error)}</p>`; return; }
   box.innerHTML = `
-    <div class="result-head"><p class="eyebrow">Today · ${esc(r.mood)}</p><h2>Feeling ${esc(r.feeling)}</h2></div>
+    <div class="result-head"><p class="eyebrow">Today · ${esc([r.mood, r.occasion, r.level].filter(Boolean).join(' · '))}</p><h2>Feeling ${esc(r.feeling)}</h2></div>
+    ${r.aiBusy ? `<p class="hint">✦ Your AI stylist is choosing from ${r.optionCount} complete outfits…</p>` : r.aiNote ? `<p class="hint">✦ ${esc(r.aiNote)}</p>` : ''}
     ${(r.warnings || []).map(w => `<p class="note warn">${esc(w)}</p>`).join('')}
-    ${r.looks.map((l, i) => lookCard(l, i, S.isLookSaved(l.id))).join('')}
-    <button class="btn ghost wide" data-act="generate">↻ Restyle</button>`;
+    ${r.looks.map((l, i) => lookCard(l, i, S.isLookSaved(l.id), true)).join('')}
+    <button class="btn ghost wide" data-act="restyle">↻ Restyle — show me different ones</button>`;
 }
 
 function renderSavedLooks() {
@@ -313,16 +325,17 @@ function staleResult() {
 
 function startOver() {
   const s = state.studio;
-  s.core.clear(); s.moodText = ''; s.moodChips = []; s.finish = {}; s.result = null; s.openFinish = false; s.openCore = false; s.pickFilter = 'all';
+  s.core.clear(); s.moodText = ''; s.moodChips = []; s.finish = {}; s.occasion = ''; s.shown = []; s.result = null; s.openFinish = false; s.openCore = false; s.pickFilter = 'all';
   s.collapsed = false; s.addingMood = false;
   renderStudio();
   window.scrollTo({ top: 0, behavior: 'smooth' });
   toast('Cleared — start fresh');
 }
 
-function generate(surprise = false) {
+function generate(surprise = false, restyle = false) {
   const s = state.studio;
   const all = state.items;
+  if (!restyle) s.shown = [];
   if (surprise) {
     const ids = E.pickSurpriseCore(all);
     if (!ids.length) { toast('Add some clothing to your closet first.'); return; }
@@ -332,11 +345,44 @@ function generate(surprise = false) {
   if (!s.core.size) { toast('Pick a core piece, or tap Surprise Me.'); return; }
   const finish = {};
   FINISH_CATS.forEach(f => { finish[f.key] = s.finish[f.key] ? itemById(s.finish[f.key]) || null : null; });
-  const history = E.learnFromWears(S.getWears(), all);
-  s.result = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChips: moodPicks(), finish, history });
-  s.collapsed = !s.result.error;
+  const history = E.learnFromWears(S.getWears(), all, S.getVotes());
+  const r = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChips: moodPicks(), finish, history, occasion: s.occasion, shown: s.shown });
+  s.result = r;
+  if (!r.error) s.shown.push(...r.looks.map(l => l.key));
+  s.collapsed = !r.error;
+  const ai = S.getAISettings();
+  const options = r.alternatives ? r.alternatives.classic.length + r.alternatives.editorial.length : 0;
+  if (!r.error && ai.key && options > 2) { r.aiBusy = true; r.optionCount = options; }
   renderStudio();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (r.aiBusy) aiJudge(r, ai);
+}
+
+/** Optional: let Gemini choose between the best few complete outfits the app built. The app's own pick stays if it fails. */
+async function aiJudge(r, ai) {
+  const WHY = 'Why your AI stylist chose it';
+  try {
+    const pick = await G.judgeLooks({ key: ai.key, model: ai.model || G.DEFAULT_MODEL, alternatives: r.alternatives, closet: state.items,
+      profile: S.getProfile(), mood: r.mood, feeling: r.feeling, occasion: r.occasion, season: r.season });
+    if (state.studio.result !== r) return;
+    const use = (k, i) => {
+      const p = pick[k]; if (!p) return;
+      const look = r.alternatives[k].find(l => l.id === p.id); if (!look) return;
+      if (p.why) look.notes = [{ label: WHY, text: p.why }, ...look.notes.filter(n => n.label !== WHY)];
+      if (look !== r.looks[i]) {
+        const s = state.studio;
+        s.shown = s.shown.filter(k2 => k2 !== r.looks[i].key).concat(look.key);
+        r.looks[i] = look;
+      }
+    };
+    use('classic', 0); use('editorial', 1);
+    r.aiNote = `Chosen by your AI stylist from ${r.optionCount} complete outfits the app built by its rules.`;
+  } catch (err) {
+    if (state.studio.result !== r) return;
+    r.aiNote = 'AI stylist unavailable right now — showing the app’s own pick.';
+  } finally {
+    if (state.studio.result === r) { r.aiBusy = false; renderResults(); }
+  }
 }
 
 function wireStudio() {
@@ -364,6 +410,21 @@ function wireStudio() {
       case 'close-core': { const f = $('#core-fold'); if (f) f.open = false; s.openCore = false; f?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); break; }
       case 'surprise': generate(true); break;
       case 'generate': generate(false); break;
+      case 'restyle': generate(false, true); break;
+      case 'occasion': {
+        s.occasion = s.occasion === b.dataset.id ? '' : b.dataset.id;
+        $('#occasion-chips').innerHTML = occasionChipsHTML();
+        break;
+      }
+      case 'vote': {
+        const look = s.result?.looks?.find(l => l.id === b.dataset.lookId);
+        if (!look?.key) break;
+        const v = +b.dataset.v, cur = S.voteOf(look.key);
+        S.setVote(look.key, look.pieceIds, cur === v ? 0 : v);
+        toast(cur === v ? 'Vote removed' : v > 0 ? 'Noted — more like this' : 'Noted — fewer like this');
+        renderResults();
+        break;
+      }
       case 'mood-chip': {
         const m = b.dataset.mood;
         if (s.moodChips.includes(m)) s.moodChips = s.moodChips.filter(x => x !== m);
@@ -788,7 +849,7 @@ function openItemSheet(id) {
   } else {
     state.draft = {
       id: S.newId('i'), isNew: true, category: cat, name: '', subtype: '', color: { hex: '#C9B79C', name: 'Beige' }, contrast: 'Medium',
-      silhouette: defaults.silhouette, vibe: [...defaults.vibe], scentMood: [...defaults.scentMood], perfumeMoods: [], perfMoodTouched: false,
+      silhouette: defaults.silhouette, vibe: [...defaults.vibe], scentMood: [...defaults.scentMood], perfumeMoods: [], perfMoodTouched: false, dressiness: '',
       fabrics: [], fabricMix: '', thickness: '', sleeves: '', notes: '',
       blob: null, previewUrl: '', nameTouched: false, contrastTouched: false, categoryTouched: false, subtypeTouched: false, fabricTouched: false,
       thickTouched: false, sleevesTouched: false, hasColor: false, autoMsg: '', shapeSuggest: null, fabricError: false, categoryError: false
@@ -898,6 +959,15 @@ const SECTIONS = {
       <p class="hint">Light = tee, silk blouse · Medium = fine knit, jeans · Thick = chunky knit, coat. Two thick pieces are never layered together.</p>`;
   },
 
+  dress: d => {
+    if (!CLOTHING_CATS.includes(d.category)) return '';
+    const auto = E.DRESSINESS[E.defaultDressiness(draftAsItem(d)) - 1];
+    const cur = d.dressiness || auto;
+    return `<span>Dressiness <small>${d.dressiness ? 'set by you' : 'auto-set from type, fabric &amp; vibe — tap to change'}</small></span>
+      ${chipRow('dressiness', E.DRESSINESS, cur, false)}
+      <p class="hint">Style me keeps every piece of a look at about the same level — no sneakers with a slip dress.</p>`;
+  },
+
   vibe: d => d.category === 'perfume'
     ? `<span>Scent accords <small>pick any — as listed on Fragrantica</small></span>
       ${E.SCENT_GROUPS.map(([g, list]) => `<p class="chip-group">${esc(g)}</p>${chipRow('scentMood', list, d.scentMood, true)}`).join('')}`
@@ -913,8 +983,12 @@ function autoPerfumeMoods(d) {
   d.perfumeMoods = E.moodsFromAccords(d.scentMood);
 }
 
+/** The draft in the shape the engine reads (for auto-set values). */
+function draftAsItem(d) { return { category: d.category, subtype: d.subtype, name: d.name, vibe: d.vibe, fabric: d.fabrics.join(', ') }; }
+
 function refresh(...keys) {
   const d = state.draft; if (!d) return;
+  if (!keys.includes('dress') && keys.some(k => ['type', 'fabric', 'vibe', 'sil'].includes(k))) keys.push('dress');
   keys.forEach(k => { const el = $('#sec-' + k); if (el) el.innerHTML = SECTIONS[k](d); });
 }
 
@@ -957,6 +1031,7 @@ function renderSheet() {
         <input id="f-fabricmix" type="text" autocomplete="off" value="${esc(d.fabricMix)}" placeholder="e.g. 80% wool, 20% polyamide"></label>
       ${sec('thick')}
       ${sec('vibe')}
+      ${sec('dress')}
       ${sec('pmood')}
       <label class="field"><span>Notes <small>optional</small></span><textarea id="f-notes" rows="2" placeholder="Anything to remember">${esc(d.notes)}</textarea></label>
       ${d.isNew ? '' : `<button class="btn danger wide" data-sheet="delete">Delete this piece</button>`}
@@ -972,7 +1047,7 @@ function setCategory(cat, manual) {
   const t = E.defaultTags(cat);
   d.subtype = ''; d.subtypeTouched = false;
   d.silhouette = t.silhouette; d.vibe = [...t.vibe]; d.scentMood = [...t.scentMood];
-  d.perfumeMoods = []; d.perfMoodTouched = false;
+  d.perfumeMoods = []; d.perfMoodTouched = false; d.dressiness = '';
   d.sleevesTouched = false; d.thickTouched = false;
   if (manual) d.categoryTouched = true;
   if (cat && d.categoryError) { d.categoryError = false; const sm = $('#sec-category small'); if (sm) { sm.className = ''; sm.textContent = 'required'; } }
@@ -1188,6 +1263,7 @@ async function saveDraft() {
     fabric: needsFabric(d.category) ? d.fabrics.join(', ') : '', fabricMix: needsFabric(d.category) ? (d.fabricMix || '').trim() : '',
     thickness: usesThick(d.category) ? d.thickness : '',
     sleeves: d.category === 'tops' ? d.sleeves : '',
+    dressiness: CLOTHING_CATS.includes(d.category) ? (d.dressiness || '') : '',
     notes: (d.notes || '').trim(),
     createdAt: d.createdAt || Date.now(), updatedAt: Date.now()
   };
@@ -1257,6 +1333,7 @@ function wireSheet() {
       autoThickness(d); refresh('fabric', 'thick');
     }
     else if (k === 'thickness') { d.thickness = v; d.thickTouched = true; refresh('thick'); }
+    else if (k === 'dressiness') { d.dressiness = v; refresh('dress'); }
     else if (k === 'sleeves') { d.sleeves = v; d.sleevesTouched = true; refresh('sleeves'); }
     else if (k === 'silhouette') { d.silhouette = d.silhouette === v ? '' : v; d.silTouched = true; refresh('sil'); }
     else if (k === 'scentMood') { d.scentMood = d.scentMood.includes(v) ? d.scentMood.filter(x => x !== v) : [...d.scentMood, v]; d.scentTouched = true; autoPerfumeMoods(d); refresh('vibe', 'pmood'); }
@@ -1264,7 +1341,7 @@ function wireSheet() {
   });
   root.addEventListener('input', e => {
     const d = state.draft; if (!d) return;
-    if (e.target.id === 'f-name') { d.name = e.target.value; d.nameTouched = true; autoFromName(); }
+    if (e.target.id === 'f-name') { d.name = e.target.value; d.nameTouched = true; autoFromName(); if (!d.dressiness) refresh('dress'); }
     if (e.target.id === 'f-colorname') d.color = { ...d.color, name: e.target.value };
     if (e.target.id === 'f-fabricmix') {
       d.fabricMix = e.target.value;
