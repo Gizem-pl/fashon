@@ -335,7 +335,8 @@ function startOver() {
 function generate(surprise = false, restyle = false) {
   const s = state.studio;
   const all = state.items;
-  if (!restyle) s.shown = [];
+  // a fresh start only when the inputs changed (that clears the result); Edit → Style me with the same choices keeps going
+  if (surprise || (!restyle && !s.result)) s.shown = [];
   if (surprise) {
     const ids = E.pickSurpriseCore(all);
     if (!ids.length) { toast('Add some clothing to your closet first.'); return; }
@@ -414,6 +415,7 @@ function wireStudio() {
       case 'occasion': {
         s.occasion = s.occasion === b.dataset.id ? '' : b.dataset.id;
         $('#occasion-chips').innerHTML = occasionChipsHTML();
+        staleResult();
         break;
       }
       case 'vote': {

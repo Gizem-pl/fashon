@@ -602,6 +602,13 @@ let LEARN = null;   // set for the duration of buildLooks
 let JIT = 1;
 let WARM = false;        // how much randomness pickBest adds: 0 = the single best choice, higher = more variety
 let CORE_IDS = new Set();
+let SHOWN = new Map();    // Restyle: piece id → how many looks already shown used it (core pieces excluded)
+
+/** Restyle: a piece already shown is pushed back — more for the main clothes than for the coat or shoes, so a new look really is new. */
+function shownPenalty(c) {
+  const n = SHOWN.get(c?.id) || 0; if (!n) return 0;
+  return n * (['outer', 'shoes'].includes(slotOf(c)) ? 0.7 : 1.6);
+}
 
 /** Like a person skipping what they wore a day or two ago: pieces worn very recently are pushed back (not the chosen core). */
 function rotation(c) {
@@ -647,7 +654,7 @@ function outfitPieces(o) {
 function pickBest(cands, scoreFn, avoid, jitter = 0.5) {
   let best = null, bs = -Infinity;
   for (const c of cands) {
-    let s = scoreFn(c) + learnedItem(c) + rotation(c) + Math.random() * jitter * JIT;
+    let s = scoreFn(c) + learnedItem(c) + rotation(c) - shownPenalty(c) + Math.random() * jitter * JIT;
     if (avoid.has(c.id)) s -= 6;
     if (s > bs) { bs = s; best = c; }
   }
@@ -1188,10 +1195,11 @@ function mirrorCheck(core, pool, mood, intent, avoid, target, shown = new Set(),
     if (seen.has(key)) continue;
     if (shown.has(key)) { skipped.push(o); continue; }         // Restyle: already shown, look further
     const overlap = outfitPieces(o).filter(p => avoid.has(p.id)).length;
-    seen.set(key, { o, score: outfitScore(o, mood, intent, target) - overlap * 2 });
+    const repeat = outfitPieces(o).reduce((t, p) => t + shownPenalty(p), 0);
+    seen.set(key, { o, score: outfitScore(o, mood, intent, target) - overlap * 2 - repeat });
   }
   JIT = 1;
-  if (!seen.size && skipped.length) skipped.forEach(o => seen.set(outfitKey(o), { o, score: outfitScore(o, mood, intent, target) }));
+  if (!seen.size && skipped.length) skipped.forEach(o => seen.set(outfitKey(o), { o, score: outfitScore(o, mood, intent, target) - outfitPieces(o).reduce((t, p) => t + shownPenalty(p), 0) }));   // all shown: the least-repeated comes back first
   return [...seen.values()].sort((a, b) => b.score - a.score);
 }
 
@@ -1232,6 +1240,8 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodC
 
   // 5. mirror check: many complete outfits, judged whole
   const shownKeys = new Set(shown);
+  SHOWN = new Map();
+  shown.forEach(k => String(k).split('|').forEach(id => { if (id && !CORE_IDS.has(id)) SHOWN.set(id, (SHOWN.get(id) || 0) + 1); }));
   const c1 = mirrorCheck(core, pool, mood, 'classic', none, target + 0.3, shownKeys);   // the classic look leans a touch more polished
   const o1 = c1[0].o;
   const used = new Set([...outfitPieces(o1), ...o1.jewelry].map(i => i.id));
@@ -1256,7 +1266,7 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodC
     classic: [look1, ...c1.slice(1, 5).map(c => mk(c, T1, f1, 'classic'))],
     editorial: [look2, ...c2.slice(1, 5).map(c => mk(c, T2, f2, 'editorial'))]
   };
-  CORE_IDS = new Set();
+  CORE_IDS = new Set(); SHOWN = new Map();
   return { mood: mood.key, feeling: mood.feeling, occasion: occ?.label || '', season: COLD ? 'cold months' : warm ? 'warm months' : 'mild weather',
     level: DRESSINESS[Math.max(0, Math.min(4, Math.round(target) - 1))], warnings: [...new Set([...o1.warnings, ...warnings])], looks: [look1, look2], alternatives };
 }
