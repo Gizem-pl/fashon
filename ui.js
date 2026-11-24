@@ -813,7 +813,7 @@ function skipDraft() {
   const d = state.draft; if (!d) return;
   if (d.isNew && d.previewUrl) URL.revokeObjectURL(d.previewUrl);
   state.draft = null;
-  if (!nextQueued(d.category)) closeSheet();
+  if (!nextQueued(d.category)) { closeSheet(); toast('Skipped — all done'); }
 }
 
 function closeSheet() {
@@ -844,9 +844,10 @@ const SECTIONS = {
 
   queue: d => {
     const n = state.addQueue.length;
-    if (!d.isNew || !n) return '';
-    return `<div class="queue-bar"><span>${n} more photo${n > 1 ? 's' : ''} waiting — Save moves to the next</span>
-      <button type="button" class="link" data-sheet="skip">Skip this one</button></div>`;
+    if (!d.isNew || (!n && state.addTotal < 2)) return '';
+    const msg = n ? `${n} more photo${n > 1 ? 's' : ''} waiting — Save moves to the next` : 'Last photo — skip it if you don’t want to add it';
+    return `<div class="queue-bar"><span>${msg}</span>
+      <button type="button" class="link" data-sheet="skip">${n ? 'Skip this one' : 'Skip &amp; finish'}</button></div>`;
   },
 
   suggest: d => {
