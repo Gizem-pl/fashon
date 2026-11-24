@@ -7,7 +7,7 @@
    The API key is the user's own and lives only on this device; requests go straight from the browser to Google.
    No DOM and no storage here: data in, advice out. */
 
-import { WEAR_TAGS, CATEGORIES, FABRICS, THICKNESS, SILHOUETTES, SLEEVES, VIBES, SCENT_MOODS, scentsOf } from './stylistEngine.js';
+import { WEAR_TAGS, CATEGORIES, FABRICS, THICKNESS, SILHOUETTES, SLEEVES, VIBES, SCENT_MOODS, scentsOf, perfumeMoodsOf } from './stylistEngine.js';
 
 const API = 'https://generativelanguage.googleapis.com/v1beta/models/';
 export const DEFAULT_MODEL = 'gemini-flash-latest';
@@ -130,7 +130,7 @@ export async function testKey(key, model = DEFAULT_MODEL) {
 export function closetLines(items) {
   return items.map(i => [
     i.id, i.name, [i.category, i.subtype].filter(Boolean).join('/'), i.color?.name, i.fabric, i.thickness && `${i.thickness.toLowerCase()} weight`,
-    i.silhouette && i.silhouette.toLowerCase(), i.sleeves && i.sleeves.toLowerCase(), (i.vibe || []).join('+'), scentsOf(i).length && `scent: ${scentsOf(i).join(', ').toLowerCase()}`
+    i.silhouette && i.silhouette.toLowerCase(), i.sleeves && i.sleeves.toLowerCase(), (i.vibe || []).join('+'), scentsOf(i).length && `scent: ${scentsOf(i).join(', ').toLowerCase()}`, i.category === 'perfume' && perfumeMoodsOf(i).length && `feels: ${perfumeMoodsOf(i).join(', ').toLowerCase()}`
   ].filter(Boolean).join(' · ')).join('\n');
 }
 

@@ -197,6 +197,7 @@ input[type=color] { width: 54px; height: 46px; padding: 3px; border: 1px solid v
 
 /* ---------- Chips & pills ---------- */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+.chip-group { margin: 12px 0 -4px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .6; }
 .chip {
   padding: 8px 15px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface);
   font-size: 13.5px; color: var(--ink); transition: background .15s, color .15s, border-color .15s;

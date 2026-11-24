@@ -761,35 +761,37 @@ function autoSleeves(d) {
 function isPerfume(d) { return d.category === 'perfume'; }
 function autoThickness(d) {
   if (!usesThick(d.category) || d.thickTouched) return;
-  d.thickness = E.defaultThickness(d.category, d.subtype, d.fabric);
+  d.thickness = E.defaultThickness(d.category, d.subtype, d.fabrics.join(', '));
 }
 
-function openItemSheet(id, startCat) {
+function openItemSheet(id) {
   const existing = id ? itemById(id) : null;
   if (existing) { state.addQueue = []; state.addTotal = 0; }
-  const cat = existing?.category || startCat || (state.closetFilter !== 'all' ? state.closetFilter : 'tops');
+  // a new piece has no category until one is chosen (or read from the name / photo) — it is required
+  const cat = existing?.category || '';
   const defaults = E.defaultTags(cat);
   if (existing) {
     const fi = E.fabricInfo(existing.fabric);
     const d = {
       ...structuredClone(existing), isNew: false, blob: null, previewUrl: S.photoURLSync(existing.id),
       nameTouched: true, contrastTouched: true, categoryTouched: true, subtypeTouched: true, fabricTouched: true, hasColor: true,
-      fabric: fi ? fi.label : '',
+      fabrics: E.fabricList(existing.fabric),
       // keep whatever was typed before as the composition, so nothing is lost
-      fabricMix: existing.fabricMix || (fi && (existing.fabric || '').toLowerCase() !== fi.label.toLowerCase() ? existing.fabric : ''),
+      fabricMix: existing.fabricMix || (fi && (existing.fabric || '').toLowerCase() !== E.fabricList(existing.fabric).join(', ').toLowerCase() ? existing.fabric : ''),
       thickTouched: !!existing.thickness, sleevesTouched: !!existing.sleeves,
       thickness: existing.thickness || (usesThick(existing.category) ? E.defaultThickness(existing.category, existing.subtype, existing.fabric) : ''),
       sleeves: existing.sleeves || (existing.category === 'tops' ? (E.isSleeveless(existing) ? 'Sleeveless' : 'Sleeved') : ''),
-      scentMood: E.scentsOf(existing),
-      autoMsg: '', shapeSuggest: null, fabricError: false
+      scentMood: E.scentsOf(existing), perfumeMoods: E.perfumeMoodsOf(existing), perfMoodTouched: !!(existing.perfumeMoods || []).length,
+      autoMsg: '', shapeSuggest: null, fabricError: false, categoryError: false
     };
     state.draft = d;
   } else {
     state.draft = {
       id: S.newId('i'), isNew: true, category: cat, name: '', subtype: '', color: { hex: '#C9B79C', name: 'Beige' }, contrast: 'Medium',
-      silhouette: defaults.silhouette, vibe: [...defaults.vibe], scentMood: [...defaults.scentMood], fabric: '', fabricMix: '', thickness: '', sleeves: '', notes: '',
+      silhouette: defaults.silhouette, vibe: [...defaults.vibe], scentMood: [...defaults.scentMood], perfumeMoods: [], perfMoodTouched: false,
+      fabrics: [], fabricMix: '', thickness: '', sleeves: '', notes: '',
       blob: null, previewUrl: '', nameTouched: false, contrastTouched: false, categoryTouched: false, subtypeTouched: false, fabricTouched: false,
-      thickTouched: false, sleevesTouched: false, hasColor: false, autoMsg: '', shapeSuggest: null, fabricError: false
+      thickTouched: false, sleevesTouched: false, hasColor: false, autoMsg: '', shapeSuggest: null, fabricError: false, categoryError: false
     };
     autoSleeves(state.draft); autoThickness(state.draft);
   }
@@ -803,7 +805,7 @@ const MAX_BATCH = 10;
 function nextQueued(prevCat) {
   const file = state.addQueue.shift();
   if (!file) { state.addTotal = 0; return false; }
-  openItemSheet(null, prevCat);
+  openItemSheet(null);
   handlePhoto([file]);
   return true;
 }
@@ -861,7 +863,7 @@ const SECTIONS = {
 
   type: d => {
     const cat = E.categoryById(d.category);
-    return cat.subtypes.length ? `<span>Type</span>${chipRow('subtype', cat.subtypes, d.subtype, false)}` : '';
+    return cat?.subtypes.length ? `<span>Type</span>${chipRow('subtype', cat.subtypes, d.subtype, false)}` : '';
   },
 
   color: d => isPerfume(d) ? '' : `
@@ -882,24 +884,34 @@ const SECTIONS = {
 
   fabric: d => {
     if (!needsFabric(d.category)) return '';
-    const fi = E.fabricInfo(d.fabric);
-    return `<span>Fabric <small class="${d.fabricError ? 'err' : ''}">${d.fabricError ? 'required — choose one' : 'required'}</small></span>
-      ${chipRow('fabric', E.FABRICS.map(f => f.label), d.fabric, false)}
-      ${fi ? `<p class="hint fab-info"><strong>${esc(fi.label)}</strong> — ${esc(fi.note)}. Sheen: ${esc(fi.sheen)} · drape: ${esc(fi.drape)} · warmth: ${esc(fi.warmth)}.</p>` : ''}`;
+    const infos = d.fabrics.map(E.fabricInfo).filter(Boolean);
+    return `<span>Fabric <small class="${d.fabricError ? 'err' : ''}">${d.fabricError ? 'required — choose at least one' : 'required · pick all that apply, main one first'}</small></span>
+      ${chipRow('fabric', E.FABRICS.map(f => f.label), d.fabrics, true)}
+      ${infos.map(fi => `<p class="hint fab-info"><strong>${esc(fi.label)}</strong> — ${esc(fi.note)}. Sheen: ${esc(fi.sheen)} · drape: ${esc(fi.drape)} · warmth: ${esc(fi.warmth)}.</p>`).join('')}`;
   },
 
   thick: d => {
     if (!usesThick(d.category)) return '';
-    const fi = E.fabricInfo(d.fabric);
+    const fi = E.fabricInfo(d.fabrics[0]);
     return `<span>Thickness <small>${d.thickTouched ? 'set by you' : `auto-set${fi ? ` from ${esc(fi.label.toLowerCase())}` : ''} — tap to change`}</small></span>
       ${chipRow('thickness', E.THICKNESS, d.thickness, false)}
       <p class="hint">Light = tee, silk blouse · Medium = fine knit, jeans · Thick = chunky knit, coat. Two thick pieces are never layered together.</p>`;
   },
 
   vibe: d => d.category === 'perfume'
-    ? `<span>Scent accords <small>pick any — as listed on Fragrantica</small></span>${chipRow('scentMood', E.SCENT_MOODS, d.scentMood, true)}`
-    : `<span>Vibe <small>pick any</small></span>${chipRow('vibe', E.VIBES, d.vibe, true)}`
+    ? `<span>Scent accords <small>pick any — as listed on Fragrantica</small></span>
+      ${E.SCENT_GROUPS.map(([g, list]) => `<p class="chip-group">${esc(g)}</p>${chipRow('scentMood', list, d.scentMood, true)}`).join('')}`
+    : !d.category ? '' : `<span>Vibe <small>pick any</small></span>${chipRow('vibe', E.VIBES, d.vibe, true)}`,
+
+  pmood: d => !isPerfume(d) ? '' : `<span>Mood <small>${d.perfMoodTouched ? 'how it makes you feel — Style me matches it to your mood' : 'suggested from the accords — tap to change'}</small></span>
+    ${chipRow('perfumeMoods', E.PERFUME_MOODS, d.perfumeMoods, true)}`
 };
+
+/** Until the user picks perfume moods themselves, suggest them from the ticked accords. */
+function autoPerfumeMoods(d) {
+  if (!isPerfume(d) || d.perfMoodTouched) return;
+  d.perfumeMoods = E.moodsFromAccords(d.scentMood);
+}
 
 function refresh(...keys) {
   const d = state.draft; if (!d) return;
@@ -932,8 +944,8 @@ function renderSheet() {
         <input id="f-name" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="e.g. black wool turtleneck">
       </label>
       ${sec('suggest', 'plain')}
-      <label class="field"><span>Category</span>
-        <select id="f-category">${E.CATEGORIES.map(c => `<option value="${c.id}" ${c.id === d.category ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select>
+      <label class="field" id="sec-category"><span>Category <small class="${d.categoryError ? 'err' : ''}">${d.categoryError ? 'required — choose one' : 'required'}</small></span>
+        <select id="f-category">${d.category ? '' : '<option value="" selected disabled>Choose a category…</option>'}${E.CATEGORIES.map(c => `<option value="${c.id}" ${c.id === d.category ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select>
       </label>
       ${sec('type')}
       ${sec('color')}
@@ -945,6 +957,7 @@ function renderSheet() {
         <input id="f-fabricmix" type="text" autocomplete="off" value="${esc(d.fabricMix)}" placeholder="e.g. 80% wool, 20% polyamide"></label>
       ${sec('thick')}
       ${sec('vibe')}
+      ${sec('pmood')}
       <label class="field"><span>Notes <small>optional</small></span><textarea id="f-notes" rows="2" placeholder="Anything to remember">${esc(d.notes)}</textarea></label>
       ${d.isNew ? '' : `<button class="btn danger wide" data-sheet="delete">Delete this piece</button>`}
     </div>
@@ -959,11 +972,14 @@ function setCategory(cat, manual) {
   const t = E.defaultTags(cat);
   d.subtype = ''; d.subtypeTouched = false;
   d.silhouette = t.silhouette; d.vibe = [...t.vibe]; d.scentMood = [...t.scentMood];
+  d.perfumeMoods = []; d.perfMoodTouched = false;
   d.sleevesTouched = false; d.thickTouched = false;
   if (manual) d.categoryTouched = true;
+  if (cat && d.categoryError) { d.categoryError = false; const sm = $('#sec-category small'); if (sm) { sm.className = ''; sm.textContent = 'required'; } }
+  const ph = $('#f-category option[value=""]'); if (cat && ph) ph.remove();
   autoSleeves(d); autoThickness(d);
   const sel = $('#f-category'); if (sel) sel.value = cat;
-  refresh('type', 'color', 'contrast', 'sil', 'sleeves', 'fabric', 'thick', 'vibe', 'suggest');
+  refresh('type', 'color', 'contrast', 'sil', 'sleeves', 'fabric', 'thick', 'vibe', 'pmood', 'suggest');
   updateNamePlaceholder();
 }
 
@@ -1050,7 +1066,7 @@ function sampleFromPhoto(e, up) {
 /** Read the typed name and pre-fill category, type, fabric, thickness and sleeves — only fields the user has not set themselves. */
 function autoFromName() {
   const d = state.draft; if (!d) return;
-  const sig = () => [d.category, d.subtype, d.fabric, d.thickness, d.sleeves, d.autoMsg].join('|');
+  const sig = () => [d.category, d.subtype, d.fabrics.join(), d.thickness, d.sleeves, d.autoMsg].join('|');
   const before = sig();
   const sug = E.suggestFromText(d.name);
   if (!sug) { if (d.autoMsg) { d.autoMsg = ''; refresh('suggest'); } scentsFromName(d); return; }
@@ -1058,10 +1074,10 @@ function autoFromName() {
   if (sug.category && !d.categoryTouched) {
     if (sug.category !== d.category) setCategory(sug.category, false);
     const c = E.categoryById(d.category);
-    if (sug.subtype && !d.subtypeTouched && c.subtypes.includes(sug.subtype)) d.subtype = sug.subtype;
+    if (sug.subtype && !d.subtypeTouched && c?.subtypes.includes(sug.subtype)) d.subtype = sug.subtype;
     d.autoMsg = `Picked ${catLabel(d.category)}${d.subtype ? ' → ' + d.subtype : ''} from the name. Change it below if that is wrong.`;
   }
-  if (sug.fabric && !d.fabricTouched && needsFabric(d.category)) d.fabric = sug.fabric;
+  if (sug.fabric && !d.fabricTouched && needsFabric(d.category)) d.fabrics = [sug.fabric];
   autoSleeves(d);
   if (sug.sleeves && !d.sleevesTouched && d.category === 'tops') d.sleeves = 'Sleeveless';
   autoThickness(d);
@@ -1079,7 +1095,7 @@ function scentsFromName(d) {
   if (!isPerfume(d) || d.scentTouched) return;
   const words = (d.name || '').toLowerCase();
   const found = E.SCENT_MOODS.filter(sc => new RegExp(`\\b${sc.toLowerCase().replace('è', '[eè]')}\\b`).test(words));
-  if (found.join() !== d.scentMood.join()) { d.scentMood = found; refresh('vibe'); }
+  if (found.join() !== d.scentMood.join()) { d.scentMood = found; autoPerfumeMoods(d); refresh('vibe', 'pmood'); }
 }
 
 async function handlePhoto(files) {
@@ -1126,17 +1142,17 @@ async function aiFill() {
     const filled = [];
     if (r.category && !d.categoryTouched) { if (r.category !== d.category) setCategory(r.category, false); filled.push('category'); }
     const cat = E.categoryById(d.category);
-    if (r.subtype && !d.subtypeTouched && cat.subtypes.includes(r.subtype)) { d.subtype = r.subtype; filled.push('type'); }
-    if (r.fabric && !d.fabricTouched && needsFabric(d.category)) { d.fabric = r.fabric; d.fabricError = false; filled.push('fabric'); }
+    if (r.subtype && !d.subtypeTouched && cat?.subtypes.includes(r.subtype)) { d.subtype = r.subtype; filled.push('type'); }
+    if (r.fabric && !d.fabricTouched && needsFabric(d.category)) { d.fabrics = [r.fabric]; d.fabricError = false; filled.push('fabric'); }
     if (r.silhouette && E.usesSilhouette(d.category) && !d.silTouched) d.silhouette = r.silhouette;
     if (r.sleeves && d.category === 'tops' && !d.sleevesTouched) d.sleeves = r.sleeves; else autoSleeves(d);
     if (r.thickness && usesThick(d.category) && !d.thickTouched) { d.thickness = r.thickness; filled.push('thickness'); } else autoThickness(d);
     if (r.vibe.length && !d.vibeTouched && d.category !== 'perfume') d.vibe = r.vibe;
-    if (d.category === 'perfume' && r.scents.length && !d.scentTouched) { d.scentMood = r.scents; filled.push('scent accords'); }
+    if (d.category === 'perfume' && r.scents.length && !d.scentTouched) { d.scentMood = r.scents; autoPerfumeMoods(d); filled.push('scent accords'); }
     if (r.name && !d.nameTouched) { d.name = r.name; const el = $('#f-name'); if (el) el.value = r.name; filled.unshift('name'); }
     d.aiMsg = filled.length ? `Filled in ${filled.join(', ')} from the photo — tap anything to change it.` : 'Looked at the photo — your choices are kept.';
     d.autoMsg = '';
-    refresh('type', 'color', 'contrast', 'sil', 'sleeves', 'fabric', 'thick', 'vibe');
+    refresh('type', 'color', 'contrast', 'sil', 'sleeves', 'fabric', 'thick', 'vibe', 'pmood');
     updateNamePlaceholder();
   } catch (err) {
     if (state.draft === d) d.aiErr = err.message || 'The AI could not read this photo.';
@@ -1148,7 +1164,14 @@ async function aiFill() {
 async function saveDraft() {
   const d = state.draft; if (!d) return;
   if (d.isNew && !d.blob) { toast('Add a photo first.'); return; }
-  if (needsFabric(d.category) && !d.fabric) {
+  if (!d.category) {
+    d.categoryError = true;
+    const sm = $('#sec-category small'); if (sm) { sm.className = 'err'; sm.textContent = 'required — choose one'; }
+    $('#sec-category')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    toast('Choose a category — it is required.');
+    return;
+  }
+  if (needsFabric(d.category) && !d.fabrics.length) {
     d.fabricError = true; refresh('fabric');
     $('#sec-fabric')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     toast('Choose a fabric — it is required.');
@@ -1161,7 +1184,8 @@ async function saveDraft() {
     silhouette: E.usesSilhouette(d.category) ? d.silhouette : '',
     vibe: d.category === 'perfume' ? [] : d.vibe,
     scentMood: d.category === 'perfume' ? [...d.scentMood] : [],
-    fabric: needsFabric(d.category) ? d.fabric : '', fabricMix: needsFabric(d.category) ? (d.fabricMix || '').trim() : '',
+    perfumeMoods: d.category === 'perfume' ? [...d.perfumeMoods] : [],
+    fabric: needsFabric(d.category) ? d.fabrics.join(', ') : '', fabricMix: needsFabric(d.category) ? (d.fabricMix || '').trim() : '',
     thickness: usesThick(d.category) ? d.thickness : '',
     sleeves: d.category === 'tops' ? d.sleeves : '',
     notes: (d.notes || '').trim(),
@@ -1183,7 +1207,7 @@ async function saveDraft() {
   refreshItems();
   S.requestPersistence();
   renderCloset();
-  if (wasNew && nextQueued(item.category)) { toast(`Added — ${state.addQueue.length + 1} to go`); return; }
+  if (wasNew && nextQueued()) { toast(`Added — ${state.addQueue.length + 1} to go`); return; }
   state.addTotal = 0;
   toast(wasNew ? 'Added to your closet' : 'Saved');
 }
@@ -1229,13 +1253,14 @@ function wireSheet() {
       refresh('type', 'sleeves', 'thick');
     }
     else if (k === 'fabric') {
-      d.fabric = d.fabric === v ? '' : v; d.fabricTouched = true; d.fabricError = false;
+      d.fabrics = d.fabrics.includes(v) ? d.fabrics.filter(x => x !== v) : [...d.fabrics, v]; d.fabricTouched = true; d.fabricError = false;
       autoThickness(d); refresh('fabric', 'thick');
     }
     else if (k === 'thickness') { d.thickness = v; d.thickTouched = true; refresh('thick'); }
     else if (k === 'sleeves') { d.sleeves = v; d.sleevesTouched = true; refresh('sleeves'); }
     else if (k === 'silhouette') { d.silhouette = d.silhouette === v ? '' : v; d.silTouched = true; refresh('sil'); }
-    else if (k === 'scentMood') { d.scentMood = d.scentMood.includes(v) ? d.scentMood.filter(x => x !== v) : [...d.scentMood, v]; d.scentTouched = true; refresh('vibe'); }
+    else if (k === 'scentMood') { d.scentMood = d.scentMood.includes(v) ? d.scentMood.filter(x => x !== v) : [...d.scentMood, v]; d.scentTouched = true; autoPerfumeMoods(d); refresh('vibe', 'pmood'); }
+    else if (k === 'perfumeMoods') { d.perfumeMoods = d.perfumeMoods.includes(v) ? d.perfumeMoods.filter(x => x !== v) : [...d.perfumeMoods, v]; d.perfMoodTouched = true; refresh('pmood'); }
   });
   root.addEventListener('input', e => {
     const d = state.draft; if (!d) return;
@@ -1244,7 +1269,8 @@ function wireSheet() {
     if (e.target.id === 'f-fabricmix') {
       d.fabricMix = e.target.value;
       const fi = E.fabricInfo(d.fabricMix);
-      if (fi && !d.fabric && !d.fabricTouched && needsFabric(d.category)) { d.fabric = fi.label; autoThickness(d); refresh('fabric', 'thick'); }
+      const found = E.fabricList(d.fabricMix);
+      if (fi && !d.fabrics.length && !d.fabricTouched && needsFabric(d.category)) { d.fabrics = found.length ? found : [fi.label]; autoThickness(d); refresh('fabric', 'thick'); }
     }
     if (e.target.id === 'f-notes') d.notes = e.target.value;
     // live colour while dragging in the native picker: update state only, never rebuild the DOM
