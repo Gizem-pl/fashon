@@ -1787,21 +1787,24 @@ function outfitScore(o, mood, intent, target) {
 
 const outfitKey = o => outfitPieces(o).map(p => p.id).sort().join('|');
 
-/** Build many complete outfits and keep the best few, judged as a whole. */
-function mirrorCheck(core, pool, mood, intent, avoid, target, shown = new Set(), n = 36) {
+/** Build many complete outfits and keep the best few, judged as a whole.
+    other: the outfit key of the look already on screen (the classic one), which the second look must not repeat. */
+function mirrorCheck(core, pool, mood, intent, avoid, target, shown = new Set(), other = '') {
   const seen = new Map(), skipped = [];
-  for (let k = 0; k < n; k++) {
+  for (let k = 0; k < 36; k++) {
     JIT = k === 0 ? 0 : 1 + k / 8;                            // first try: the single best choice each step; then wider variations
     const o = completeOutfit(core, pool, mood, intent, avoid);
     const key = outfitKey(o);
     if (seen.has(key)) continue;
-    if (shown.has(key)) { skipped.push(o); continue; }         // Restyle: already shown, look further
+    if ((other && key === other) || shown.has(key)) { skipped.push(o); continue; }   // the other look on screen, or already shown (Restyle): look further
     const overlap = outfitPieces(o).filter(p => avoid.has(p.id)).reduce((t, p) => t + (REUSED.has(slotOf(p)) ? 0.35 : 1), 0);
     const repeat = outfitPieces(o).reduce((t, p) => t + shownPenalty(p) + seenPenalty(p), 0);
     seen.set(key, { o, score: outfitScore(o, mood, intent, target) - overlap * 2 - repeat });
   }
   JIT = 1;
-  if (!seen.size && skipped.length) skipped.forEach(o => seen.set(outfitKey(o), { o, score: outfitScore(o, mood, intent, target) - outfitPieces(o).reduce((t, p) => t + shownPenalty(p) + seenPenalty(p), 0) }));   // all shown: the least-repeated comes back first
+  // all shown: the least-repeated comes back first, and the same outfit twice on one screen only when there is nothing else
+  if (!seen.size && skipped.length) skipped.forEach(o => seen.set(outfitKey(o), { o, score: outfitScore(o, mood, intent, target)
+    - outfitPieces(o).reduce((t, p) => t + shownPenalty(p) + seenPenalty(p), 0) - (other && outfitKey(o) === other ? 1000 : 0) }));
   return [...seen.values()].sort((a, b) => b.score - a.score);
 }
 
@@ -1858,7 +1861,7 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodC
   const o1 = c1[0].o;
   const used = new Set([...outfitPieces(o1), ...o1.jewelry].map(i => i.id));
   core.forEach(c => used.delete(c.id));
-  const c2 = mirrorCheck(core, pool, mood, 'editorial', used, target - 0.2, shownKeys);
+  const c2 = mirrorCheck(core, pool, mood, 'editorial', used, target - 0.2, shownKeys, outfitKey(o1));
   const fixJewel = o => { if (finish.jewelry && !o.jewelry.length) o.jewelry = [finish.jewelry]; return o; };
 
   // no perfume chosen: suggest one from the shelf that matches the mood (a different one per look when there is a choice)
@@ -1873,10 +1876,13 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodC
   const mk = (c, T, f, intent) => buildLookObject(T[0], T[1], fixJewel(c.o), f, mood, intent, OCC);
   const look1 = mk(c1[0], T1, f1, 'classic');
   const look2 = mk(c2[0], T2, f2, 'editorial');
-  // the next-best options, for an AI stylist to choose from
+  // the next-best options, for an AI stylist to choose from. No outfit is in both lists, so it can never pick one outfit for both looks.
+  const more = (list, skip) => list.slice(1).filter(c => !skip.has(outfitKey(c.o))).slice(0, 4);
+  const classicMore = more(c1, new Set([look2.key]));
+  const editorialMore = more(c2, new Set([look1.key, ...classicMore.map(c => outfitKey(c.o))]));
   const alternatives = {
-    classic: [look1, ...c1.slice(1, 5).map(c => mk(c, T1, f1, 'classic'))],
-    editorial: [look2, ...c2.slice(1, 5).map(c => mk(c, T2, f2, 'editorial'))]
+    classic: [look1, ...classicMore.map(c => mk(c, T1, f1, 'classic'))],
+    editorial: [look2, ...editorialMore.map(c => mk(c, T2, f2, 'editorial'))]
   };
   // what they have seen a lot lately, for an AI stylist choosing between close outfits
   const clothesById = new Map(items.filter(i => CLOTHING_SLOTS.has(slotOf(i))).map(i => [i.id, i]));
@@ -2016,6 +2022,13 @@ export function detectGarmentType(text) {
   if (/(skirt|trouser|pant|jean|short|culotte|legging)/.test(t)) return 'bottom';
   return 'top';
 }
+/** For a bottom: 'skirt', 'trousers' (jeans, culottes …) or 'shorts', from whichever the text names first; '' when it names none. */
+export function detectLegs(text) {
+  const t = lc(text);
+  const at = [['skirt', /skirt/], ['shorts', /\bshorts\b/], ['trousers', /trouser|pant|jean|culotte|legging|chino|jogger|slacks/]]
+    .map(([k, re]) => [k, t.search(re)]).filter(([, i]) => i >= 0).sort((a, b) => a[1] - b[1]);
+  return at[0]?.[0] || '';
+}
 export function detectFit(text) {
   const t = lc(text);
   if (/(oversiz|boxy|dropped shoulder|drop shoulder|slouch|baggy)/.test(t)) return 'oversized';
@@ -2044,9 +2057,9 @@ function sizeOrderKey(s) {
 
 /**
  * Recommend a size.
- * opts: { rows, meta, type, fit, kind: 'garment'|'body'|'auto' }
+ * opts: { rows, meta, type, fit, kind: 'garment'|'body'|'auto', legs: for a bottom, 'skirt'|'trousers'|'shorts'|'' (see detectLegs) }
  */
-export function recommendSize(profile, { rows, meta, type, fit, kind = 'auto' }) {
+export function recommendSize(profile, { rows, meta, type, fit, kind = 'auto', legs = '' }) {
   if (!rows.length) return { ok: false, message: 'I could not read a size chart. Paste rows such as “S 88 70 94” under a header like “Bust Waist Hips”, or “Size M: bust 92cm, waist 76cm”.' };
   const body = { bust: +profile.bust, waist: +profile.waist, hips: +profile.hips, shoulder: +profile.shoulder || 38, height: +profile.height };
   let chartKind = kind;
@@ -2099,7 +2112,8 @@ export function recommendSize(profile, { rows, meta, type, fit, kind = 'auto' })
   // length / proportion for 170 cm
   const h = body.height || 170;
   const len = best.row.length;
-  const lengthNote = len ? lengthAdvice(type, len, h, best.row) : '';
+  // trouser charts often list only the inseam (Uniqlo does): that is length advice too
+  const lengthNote = len || (type === 'bottom' && best.row.inseam) ? lengthAdvice(type, len, h, best.row, legs) : '';
   const sleeve = best.row.sleeve && (type === 'top' || type === 'outer')
     ? `Sleeve ${best.row.sleeve} cm: at ${h} cm your arm needs roughly ${Math.round(h * 0.35)} cm from shoulder to wrist bone${best.row.sleeve < h * 0.33 ? ' — expect a three-quarter sleeve' : best.row.sleeve > h * 0.38 ? ' — sleeves will run long (good for an oversized, pushed-up look)' : ' — length looks right'}.` : '';
 
@@ -2119,7 +2133,8 @@ export function recommendSize(profile, { rows, meta, type, fit, kind = 'auto' })
   };
 }
 
-function lengthAdvice(type, len, h, row) {
+/** legs (bottoms only): 'skirt', 'trousers', 'shorts' or '' (see detectLegs). */
+function lengthAdvice(type, len, h, row, legs = '') {
   const k = h / 170; // scale from a 170 cm reference
   if (type === 'top') {
     const L = len / k;
@@ -2136,10 +2151,13 @@ function lengthAdvice(type, len, h, row) {
     return `Length ${len} cm is a long, almost-ankle line — dramatic on you; wear with slim bottoms and a defined waist.`;
   }
   if (type === 'bottom') {
-    if (row.inseam) {
-      const I = row.inseam;
-      return `Inseam ${I} cm: for ${h} cm, ~${Math.round(h * 0.45)} cm is a full-length trouser with a small break; ${I < h * 0.4 ? 'this will read ankle-length or cropped' : I > h * 0.48 ? 'this will pool — plan on hemming or wearing heels' : 'this length should land at the ankle bone'}.`;
+    // trousers: the inseam, or else their length from the waist (the outseam) less a typical rise of about 27 cm — never a skirt length
+    const I = row.inseam || (legs === 'trousers' && len ? Math.round(len - 27) : 0);
+    if (I) {
+      const what = row.inseam ? `Inseam ${I} cm` : `Length ${len} cm from the waist is an inseam of about ${I} cm`;
+      return `${what}: for ${h} cm, ~${Math.round(h * 0.45)} cm is a full-length trouser with a small break; ${I < h * 0.4 ? 'this will read ankle-length or cropped' : I > h * 0.48 ? 'this will pool — plan on hemming or wearing heels' : 'this length should land at the ankle bone'}.`;
     }
+    if (legs === 'shorts') return '';
     const L = len / k;
     if (L < 45) return `Length ${len} cm is a mini on you.`;
     if (L < 62) return `Length ${len} cm sits at or just below the knee — a classic skirt length on 170 cm.`;

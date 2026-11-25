@@ -375,7 +375,7 @@ export async function restoreBackup(file, mode = 'merge') {
 
   if (mode === 'replace') {
     for (const it of [...getItems(), ...getWears()]) { revokePhotoURL(it.id); try { await deletePhoto(it.id); } catch {} }
-    write(LS.items, []); write(LS.looks, []); write(LS.checks, []); write(LS.wears, []);
+    write(LS.items, []); write(LS.looks, []); write(LS.checks, []); write(LS.wears, []); write(LS.votes, []); write(LS.moods, []);
   }
   const byId = new Map(getItems().map(i => [i.id, i]));
   let photosRestored = 0;

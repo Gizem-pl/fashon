@@ -1830,7 +1830,8 @@ function runAnalysis(c) {
   const type = c.type === 'auto' ? E.detectGarmentType(c.name + ' ' + c.text.slice(0, 600) + ' ' + c.url) : c.type;
   const fit = c.fit === 'auto' ? E.detectFit(c.text + ' ' + c.name) : c.fit;
   const parsed = E.parseSizeChart(c.text);
-  const size = E.recommendSize(profile, { rows: parsed.rows, meta: parsed.meta, type, fit, kind: c.kind });
+  const legs = type === 'bottom' ? E.detectLegs(c.name + ' ' + c.text.slice(0, 600) + ' ' + c.url) : '';
+  const size = E.recommendSize(profile, { rows: parsed.rows, meta: parsed.meta, type, fit, kind: c.kind, legs });
   const fabric = E.evaluateFabric(c.text);
   const color = c.color || E.detectColor(blob);
   const groups = E.matchCloset(state.items, { type, fit, color });
@@ -2284,15 +2285,23 @@ async function boot() {
   S.requestPersistence();
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    // an installed iPhone app is rarely restarted: look for a new version whenever it comes back to the screen, and reload into it once
+    // an installed iPhone app is rarely restarted: look for a new version whenever it comes back to the screen, and reload into it once.
+    // Never in the middle of something: a piece being added (with photos still queued — choosing photos is itself a trip away from
+    // the app), a diary entry, or a stylist reply on its way. Then it waits until the next time the app comes back.
     const hadController = !!navigator.serviceWorker.controller;
-    let reloaded = false;
+    let pending = false;
+    const busy = () => !!(state.draft || state.wear || state.chat.busy);
+    const reloadIfIdle = () => { if (pending && !busy()) { pending = false; location.reload(); } };
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!hadController || reloaded || state.wear) return;   // first install, or mid-entry: pick it up next time
-      reloaded = true; location.reload();
+      if (!hadController) return;   // first install: nothing to reload into
+      pending = true; reloadIfIdle();
     });
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        reloadIfIdle();
+        reg.update().catch(() => {});
+      });
     }).catch(err => console.warn('SW failed', err));
   }
 }
