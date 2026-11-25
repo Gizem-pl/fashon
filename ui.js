@@ -34,7 +34,7 @@ const state = {
   items: [],
   closetFilter: 'all',
   studio: { core: new Set(), openCore: false, pickFilter: 'all', moodText: '', moodChips: [], finish: {}, result: null, openFinish: false,
-            seg: 'create', collapsed: false, addingMood: false, occasion: '', shown: [] },
+            seg: 'create', collapsed: false, addingMood: false, occasion: '', shown: [], openNotes: new Set() },
   checker: { url: '', name: '', text: '', type: 'auto', fit: 'auto', kind: 'auto', color: null, report: null, activeId: null,
              product: null, shots: [], reading: false, ai: null, aiBusy: false, openManual: false },
   chat: { text: '', photo: null, photoUrl: '', busy: false, ctrl: null },
@@ -136,7 +136,10 @@ function studioCreateHTML() {
       <div class="mini">${core.slice(0, 4).map(i => `<span>${pic(i)}</span>`).join('')}</div>
       <div class="grow"><p class="eyebrow">Built around</p><strong>${esc(core.map(i => i.name).join(', ') || 'Your pieces')}</strong>
         ${moods ? `<small>${esc(moods)}</small>` : ''}</div>
-      <button class="btn ghost small" data-act="edit-brief">Edit</button>
+      <div class="brief-acts">
+        <button class="btn ghost small" data-act="restyle">↻ Restyle</button>
+        <button class="link" data-act="edit-brief">Edit</button>
+      </div>
     </section>
     <div id="studio-results"></div>
     <p class="center"><button class="link" data-act="start-over">Start over</button></p>`;
@@ -261,6 +264,8 @@ function updateCoreSummary() {
 function lookCard(look, idx, saved, votable = false) {
   const pieces = look.itemIds.map(itemById).filter(Boolean);
   const rec = votable && look.key ? S.voteRecord(look.key) : null, v = rec?.vote || 0;
+  // the AI stylist's one-line reason stays in view; the long styling notes fold away so Restyle is a short scroll
+  const why = look.notes.find(n => n.label === AI_WHY), notes = look.notes.filter(n => n !== why);
   return `
   <article class="look card" data-look-id="${look.id}">
     <header class="look-head">
@@ -269,10 +274,13 @@ function lookCard(look, idx, saved, votable = false) {
     </header>
     ${collage(look.itemIds)}
     <p class="legend">${pieces.map(p => `<span><i style="background:${esc(p.color?.hex)}"></i>${esc(p.name)}</span>`).join('')}</p>
-    <h4 class="notes-title">Creative Director’s notes</h4>
-    <dl class="notes">
-      ${look.notes.map(n => `<div><dt>${esc(n.label)}</dt><dd>${esc(n.text)}</dd></div>`).join('')}
-    </dl>
+    ${why ? `<p class="look-note">✦ ${esc(why.text)}</p>` : ''}
+    ${notes.length ? `<details class="notes-fold" data-notes="${look.id}" ${state.studio.openNotes.has(look.id) ? 'open' : ''}>
+      <summary><h4 class="notes-title">Creative Director’s notes <small>${notes.length}</small></h4></summary>
+      <dl class="notes">
+        ${notes.map(n => `<div><dt>${esc(n.label)}</dt><dd>${esc(n.text)}</dd></div>`).join('')}
+      </dl>
+    </details>` : ''}
     ${votable && look.key ? `<div class="vote" role="group" aria-label="Would you wear this?"><span>Would you wear this?</span>
       <button class="chip ${v > 0 ? 'on' : ''}" data-act="vote" data-v="1" data-look-id="${look.id}" aria-pressed="${v > 0}">👍 Yes</button>
       <button class="chip ${v < 0 ? 'on' : ''}" data-act="vote" data-v="-1" data-look-id="${look.id}" aria-pressed="${v < 0}">👎 Not me</button></div>
@@ -394,9 +402,10 @@ function generate(surprise = false, restyle = false) {
   if (r.aiBusy) aiJudge(r, ai);
 }
 
+const AI_WHY = 'Why your AI stylist chose it';
+
 /** Optional: let Gemini choose between the best few complete outfits the app built. The app's own pick stays if it fails. */
 async function aiJudge(r, ai) {
-  const WHY = 'Why your AI stylist chose it';
   try {
     const pick = await G.judgeLooks({ key: ai.key, model: ai.model || G.DEFAULT_MODEL, alternatives: r.alternatives, closet: state.items,
       profile: S.getProfile(), mood: r.mood, feeling: r.feeling, occasion: r.occasion, season: r.season, votes: S.getVotes(), recentlySeen: r.recentlySeen });
@@ -404,7 +413,7 @@ async function aiJudge(r, ai) {
     const use = (k, i) => {
       const p = pick[k]; if (!p) return;
       const look = r.alternatives[k].find(l => l.id === p.id); if (!look) return;
-      if (p.why) look.notes = [{ label: WHY, text: p.why }, ...look.notes.filter(n => n.label !== WHY)];
+      if (p.why) look.notes = [{ label: AI_WHY, text: p.why }, ...look.notes.filter(n => n.label !== AI_WHY)];
       if (look !== r.looks[i]) {
         const s = state.studio;
         s.shown = s.shown.filter(k2 => k2 !== r.looks[i].key).concat(look.key);
@@ -547,6 +556,8 @@ function wireStudio() {
   v.addEventListener('toggle', e => {
     if (e.target.id === 'finish-fold') state.studio.openFinish = e.target.open;
     if (e.target.id === 'core-fold') state.studio.openCore = e.target.open;
+    const nid = e.target.dataset?.notes;
+    if (nid) state.studio.openNotes[e.target.open ? 'add' : 'delete'](nid);
     const wid = e.target.dataset?.wearId;
     if (wid) { if (e.target.open) state.openWear = wid; else if (state.openWear === wid) state.openWear = null; }
   }, true);
