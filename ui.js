@@ -2261,7 +2261,16 @@ async function boot() {
   S.requestPersistence();
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW failed', err));
+    // an installed iPhone app is rarely restarted: look for a new version whenever it comes back to the screen, and reload into it once
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded || state.wear) return;   // first install, or mid-entry: pick it up next time
+      reloaded = true; location.reload();
+    });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(err => console.warn('SW failed', err));
   }
 }
 boot();
