@@ -522,6 +522,7 @@ function wireStudio() {
         break;
       }
       case 'edit-wear': openWearSheet({ wearId: b.dataset.id }); break;
+      case 'log-own-wear': openWearSheet({ own: true }); break;
       case 'ai-wear': askAIForEntry(b.dataset.id); break;
       case 'del-wear': {
         if (!confirm('Delete this outfit from your diary? The photo will be removed too.')) break;
@@ -579,10 +580,12 @@ function renderDiary() {
   const box = $('#studio-diary');
   if (!box) return;
   const wears = S.getWears();
-  if (!wears.length) { box.innerHTML = `<div class="empty quiet"><p class="lede">Your diary is empty</p><p>Tap “I wore this” under any look to log it with a photo. Every entry teaches the stylist what works on you.</p></div>`; return; }
+  const logBtn = `<button class="btn primary wide" data-act="log-own-wear">+ Log what I wore today</button>`;
+  if (!wears.length) { box.innerHTML = `<div class="empty quiet"><p class="lede">Your diary is empty</p><p>Log any outfit you put together yourself, or tap “I wore this” under a suggested look. Every entry teaches the stylist what works on you.</p>${logBtn}</div>`; return; }
   const hasKey = !!S.getAISettings().key;
   box.innerHTML = `
-    <p class="hint">Every outfit you log teaches the stylist what works on you.</p>
+    ${logBtn}
+    <p class="hint">Every outfit you log teaches the stylist what works on you — your own outfits too.</p>
     ${wears.map(w => {
       const pieces = (w.itemIds || w.pieceIds || []).map(itemById).filter(Boolean);
       const busy = state.aiBusy.has(w.id);
@@ -611,11 +614,15 @@ function renderDiary() {
     }).join('')}`;
 }
 
-function openWearSheet({ look, wearId }) {
+function openWearSheet({ look, wearId, own }) {
   const ex = wearId ? S.getWears().find(w => w.id === wearId) : null;
   if (wearId && !ex) return;
+  const draft = { blob: null, previewUrl: '', ownUrl: false, busy: false, pickFilter: 'all' };
   state.wear = ex
-    ? { ...structuredClone(ex), isNew: false, blob: null, previewUrl: ex.hasPhoto ? S.photoURLSync(ex.id) : '', ownUrl: false, busy: false }
+    ? { ...structuredClone(ex), ...draft, isNew: false, previewUrl: ex.hasPhoto ? S.photoURLSync(ex.id) : '' }
+    : own
+    ? { id: S.newId('w'), isNew: true, own: true, lookId: null, title: '', mood: '',
+        pieceIds: [], itemIds: [], feel: '', tags: [], notes: '', ai: null, wornAt: Date.now(), hasPhoto: false, ...draft }
     : {
         id: S.newId('w'), isNew: true, lookId: look.id, title: look.title, mood: look.mood, ...(look.occasion != null ? { occasion: look.occasion } : {}),
         pieceIds: [...(look.pieceIds?.length ? look.pieceIds : look.itemIds)], itemIds: [...look.itemIds],
@@ -641,7 +648,24 @@ function wChips(name, options, value, multi) {
   }).join('')}</div>`;
 }
 
+/** Your own outfit: pick everything you wore from the closet, accessories included. */
+const WEAR_PICK_FILTERS = [...PICK_FILTERS, { id: 'extras', label: 'Accessories & beauty', test: i => !CLOTHING_CATS.includes(i.category) }];
+
 const WSEC = {
+  pieces: w => {
+    const filters = WEAR_PICK_FILTERS.filter(f => f.id === 'all' || state.items.some(f.test));
+    if (!filters.some(f => f.id === w.pickFilter)) w.pickFilter = 'all';
+    const test = WEAR_PICK_FILTERS.find(f => f.id === w.pickFilter).test;
+    const shown = state.items.filter(test);
+    const on = new Set(w.itemIds), n = w.itemIds.length;
+    return `<span>What did you wear? <small>${n ? `${n} piece${n > 1 ? 's' : ''} picked` : 'tap every piece'}</small></span>
+    <div class="pills scroll">${filters.map(f => `<button type="button" class="pill ${w.pickFilter === f.id ? 'on' : ''}" data-wear-filter="${f.id}">${esc(f.label)}</button>`).join('')}</div>
+    <div class="pick-grid">${shown.length
+      ? shown.map(i => `<button type="button" class="pick ${on.has(i.id) ? 'on' : ''}" data-wear-piece="${i.id}" aria-pressed="${on.has(i.id)}">${pic(i)}<span class="tick">✓</span><span class="cap">${esc(i.name)}</span></button>`).join('')
+      : `<p class="hint pad">Nothing here yet — add pieces in the Closet tab.</p>`}</div>`;
+  },
+  occasion: w => `<span>Where did you wear it? <small>optional</small></span>
+    <div class="chips">${E.OCCASIONS.map(o => `<button type="button" class="chip ${w.occasion === o.id ? 'on' : ''}" data-wchip="occasion" data-v="${esc(o.id)}" aria-pressed="${w.occasion === o.id}">${esc(o.label)}</button>`).join('')}</div>`,
   photo: w => `
     <label class="upload tall ${w.previewUrl ? 'has' : ''}">
       ${w.previewUrl ? `<img src="${w.previewUrl}" alt="Your outfit">` : `<span class="plus">+</span><span>Add a photo of you wearing it</span>`}
@@ -677,11 +701,14 @@ function renderWearSheet() {
   <div class="sheet" role="dialog" aria-modal="true" aria-label="I wore this">
     <header class="sheet-head">
       <button class="link" data-wear="close">Cancel</button>
-      <h2>${w.isNew ? 'I wore this' : 'Edit diary entry'}</h2>
+      <h2>${w.isNew ? (w.own ? 'What I wore' : 'I wore this') : 'Edit diary entry'}</h2>
       <button class="link strong" data-wear="save">Save</button>
     </header>
     <div class="sheet-body">
-      <p class="eyebrow">${esc(w.title || 'Outfit')}${w.mood ? ' · ' + esc(w.mood) : ''}</p>
+      ${w.own
+        ? `<label class="field"><span>Name it <small>optional</small></span><input id="w-title" type="text" maxlength="60" value="${esc(w.title)}" placeholder="e.g. Grey knit, wide trousers"></label>
+           ${sec('pieces')}${sec('occasion')}`
+        : `<p class="eyebrow">${esc(w.title || 'Outfit')}${w.mood ? ' · ' + esc(w.mood) : ''}</p>`}
       ${sec('photo', 'plain')}
       <label class="field"><span>Worn on</span><input id="w-date" type="date" value="${dateInput(w.wornAt)}" max="${dateInput(Date.now())}"></label>
       ${sec('feel')}
@@ -707,7 +734,7 @@ async function handleWearPhoto(file) {
 
 function wearPayload(w) {
   return {
-    id: w.id, lookId: w.lookId, title: w.title, mood: w.mood, ...(w.occasion != null ? { occasion: w.occasion } : {}), pieceIds: w.pieceIds, itemIds: w.itemIds,
+    id: w.id, lookId: w.lookId, ...(w.own ? { own: true } : {}), title: (w.title || '').trim() || (w.own ? 'My own outfit' : ''), mood: w.mood, ...(w.occasion != null ? { occasion: w.occasion } : {}), pieceIds: w.pieceIds, itemIds: w.itemIds,
     feel: w.feel, tags: w.tags, notes: (w.notes || '').trim(), ai: w.ai || null,
     wornAt: w.wornAt, hasPhoto: !!(w.hasPhoto || w.blob), createdAt: w.createdAt || Date.now()
   };
@@ -715,7 +742,11 @@ function wearPayload(w) {
 
 async function saveWearDraft() {
   const w = state.wear; if (!w) return;
-  if (!w.previewUrl && !w.feel && !w.tags.length) { toast('Add a photo or tell me how it felt.'); return; }
+  if (w.own) {
+    w.itemIds = w.itemIds.filter(id => itemById(id));
+    w.pieceIds = w.itemIds.filter(id => CLOTHING_CATS.includes(itemById(id).category));
+    if (!w.pieceIds.length) { toast('Pick at least one piece of clothing you wore.'); return; }
+  } else if (!w.previewUrl && !w.feel && !w.tags.length) { toast('Add a photo or tell me how it felt.'); return; }
   const rec = wearPayload(w);
   try {
     if (w.blob) { await S.putPhoto(rec.id, w.blob); S.revokePhotoURL(rec.id); await S.getPhotoURL(rec.id); }
@@ -791,12 +822,28 @@ function wireWearSheet() {
       if (a === 'ai') askAIInSheet();
       return;
     }
+    const f = e.target.closest('[data-wear-filter]');
+    if (f) { w.pickFilter = f.dataset.wearFilter; refreshWear('pieces'); return; }
+    const p = e.target.closest('[data-wear-piece]');
+    if (p) {
+      const id = p.dataset.wearPiece;
+      w.itemIds = w.itemIds.includes(id) ? w.itemIds.filter(x => x !== id) : [...w.itemIds, id];
+      const grid = p.closest('.pick-grid'), top = grid?.scrollTop;
+      refreshWear('pieces');
+      const g = $('#wsec-pieces .pick-grid'); if (g && top) g.scrollTop = top;
+      return;
+    }
     const chip = e.target.closest('[data-wchip]'); if (!chip) return;
     const v = chip.dataset.v;
-    if (chip.dataset.wchip === 'feel') { w.feel = w.feel === v ? '' : v; refreshWear('feel'); }
+    if (chip.dataset.wchip === 'occasion') { if (w.occasion === v) delete w.occasion; else w.occasion = v; refreshWear('occasion'); }
+    else if (chip.dataset.wchip === 'feel') { w.feel = w.feel === v ? '' : v; refreshWear('feel'); }
     else { w.tags = w.tags.includes(v) ? w.tags.filter(t => t !== v) : [...w.tags, v]; refreshWear('tags'); }
   });
-  root.addEventListener('input', e => { if (state.wear && e.target.id === 'w-notes') state.wear.notes = e.target.value; });
+  root.addEventListener('input', e => {
+    if (!state.wear) return;
+    if (e.target.id === 'w-notes') state.wear.notes = e.target.value;
+    if (e.target.id === 'w-title') state.wear.title = e.target.value;
+  });
   root.addEventListener('change', e => {
     const w = state.wear; if (!w) return;
     if (e.target.id === 'wear-photo') handleWearPhoto(e.target.files?.[0]);
