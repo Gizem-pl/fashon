@@ -373,7 +373,7 @@ function generate(surprise = false, restyle = false) {
   // a fresh start only when the inputs changed (that clears the result); Edit → Style me with the same choices keeps going
   if (surprise || (!restyle && !s.result)) s.shown = [];
   if (surprise) {
-    const ids = E.pickSurpriseCore(all);
+    const ids = E.pickSurpriseCore(all, S.getSeen());
     if (!ids.length) { toast('Add some clothing to your closet first.'); return; }
     s.core = new Set(ids);
     renderPicker();
@@ -382,9 +382,9 @@ function generate(surprise = false, restyle = false) {
   const finish = {};
   FINISH_CATS.forEach(f => { finish[f.key] = s.finish[f.key] ? itemById(s.finish[f.key]) || null : null; });
   const history = E.learnFromWears(S.getWears(), all, S.getVotes());
-  const r = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChips: moodPicks(), finish, history, occasion: s.occasion, shown: s.shown });
+  const r = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChips: moodPicks(), finish, history, occasion: s.occasion, shown: s.shown, seen: S.getSeen() });
   s.result = r;
-  if (!r.error) s.shown.push(...r.looks.map(l => l.key));
+  if (!r.error) { s.shown.push(...r.looks.map(l => l.key)); S.markSeen(r.looks); }
   s.collapsed = !r.error;
   const ai = S.getAISettings();
   const options = r.alternatives ? r.alternatives.classic.length + r.alternatives.editorial.length : 0;
@@ -399,7 +399,7 @@ async function aiJudge(r, ai) {
   const WHY = 'Why your AI stylist chose it';
   try {
     const pick = await G.judgeLooks({ key: ai.key, model: ai.model || G.DEFAULT_MODEL, alternatives: r.alternatives, closet: state.items,
-      profile: S.getProfile(), mood: r.mood, feeling: r.feeling, occasion: r.occasion, season: r.season, votes: S.getVotes() });
+      profile: S.getProfile(), mood: r.mood, feeling: r.feeling, occasion: r.occasion, season: r.season, votes: S.getVotes(), recentlySeen: r.recentlySeen });
     if (state.studio.result !== r) return;
     const use = (k, i) => {
       const p = pick[k]; if (!p) return;
@@ -408,6 +408,7 @@ async function aiJudge(r, ai) {
       if (look !== r.looks[i]) {
         const s = state.studio;
         s.shown = s.shown.filter(k2 => k2 !== r.looks[i].key).concat(look.key);
+        S.swapSeen(r.looks[i].key, look);
         r.looks[i] = look;
       }
     };

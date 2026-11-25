@@ -575,10 +575,11 @@ const PICK = { type: 'OBJECT', properties: { id: { type: 'STRING' }, why: { type
 const JUDGE_SCHEMA = { type: 'OBJECT', properties: { classic: PICK, editorial: PICK }, required: ['classic', 'editorial'] };
 
 /** alternatives: { classic: [look], editorial: [look] } with look.pieceIds. Returns { classic: { id, why }, editorial: { id, why } }. */
-export async function judgeLooks({ key, model = DEFAULT_MODEL, alternatives, closet = [], profile, mood, feeling, occasion, season, votes = [], signal }) {
+export async function judgeLooks({ key, model = DEFAULT_MODEL, alternatives, closet = [], profile, mood, feeling, occasion, season, votes = [], recentlySeen = [], signal }) {
   if (!key) throw new Error('Add your Gemini key in Profile first.');
   const byId = new Map(closet.map(i => [i.id, i]));
   const list = looks => looks.map(l => `${l.id}:\n${closetLines(l.pieceIds.map(id => byId.get(id)).filter(Boolean)).replace(/^/gm, '  ')}`).join('\n');
+  const seenNames = recentlySeen.map(id => byId.get(id)?.name).filter(Boolean);
   const prompt = [
     'You are the personal stylist inside Fashon. The app has already built complete outfits from the person\'s own closet, following its rules.',
     'Choose the one outfit from each list that a good stylist would actually send them out in today — judge each outfit as a whole:',
@@ -587,6 +588,7 @@ export async function judgeLooks({ key, model = DEFAULT_MODEL, alternatives, clo
     `Mood: ${mood} (${feeling}). ${occasion ? `Occasion: ${occasion}.` : 'No occasion given.'} Season: ${season}.`,
     'ABOUT THE PERSON', profileLines(profile),
     votes.length ? '\n' + VOTES_HEAD + '\n' + voteLines(votes, byId) : '',
+    seenNames.length ? `\nThe app has shown them these pieces a lot in the last few days: ${seenNames.join(', ')}. When two outfits are about equally good, choose the one that gives them something fresher.` : '',
     '',
     'LIST A — "The Polished Classic" (balanced, defined, light-to-dark):', list(alternatives.classic),
     '',

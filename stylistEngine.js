@@ -837,6 +837,7 @@ let JIT = 1;        // how much randomness pickBest adds: 0 = the single best ch
 let WARM = false;
 let CORE_IDS = new Set();
 let SHOWN = new Map();    // Restyle: piece id → how many looks already shown used it (core pieces excluded)
+let SEEN = new Map();     // piece id → how much it was shown in looks over the last days (see seenWeights)
 let OCC = '';             // the occasion of the looks being built
 let CNOW = coldnessAt();  // how cold it is, 0 … 1 (see coldnessAt); set again by every buildLooks
 let TIGHTS = false;       // tights picked under Finishing touches
@@ -845,6 +846,30 @@ let TIGHTS = false;       // tights picked under Finishing touches
 function shownPenalty(c) {
   const n = SHOWN.get(c?.id) || 0; if (!n) return 0;
   return n * (['outer', 'shoes'].includes(slotOf(c)) ? 0.7 : 1.6);
+}
+
+/* Seen lately: every look the Studio shows is remembered for two weeks, so the next visit does not open on the same pieces.
+   A showing counts fully today, half after two days, a tenth after a week. Pieces seen often step back further, but never
+   out of reach: the push levels off, so a much better outfit still wins, and once everything has been seen it is the
+   least-recent that comes forward. The coat and shoes are pushed back gently (one coat all week is normal); a piece picked
+   as the core is never pushed back. */
+const SEEN_HALF_LIFE = 2 * 864e5, SEEN_MAX_AGE = 14 * 864e5;
+/** entries: [{ at, ids }] — one per look shown. Returns piece id → weight. */
+export function seenWeights(entries = [], now = Date.now()) {
+  const m = new Map();
+  for (const e of entries || []) {
+    const age = Math.max(0, now - (e?.at || 0));
+    if (age > SEEN_MAX_AGE) continue;
+    const w = 0.5 ** (age / SEEN_HALF_LIFE);
+    new Set(e.ids || []).forEach(id => m.set(id, (m.get(id) || 0) + w));
+  }
+  return m;
+}
+function seenPenalty(c, map = SEEN) {
+  const w = c && !CORE_IDS.has(c.id) ? map.get(c.id) : 0;
+  if (!w) return 0;
+  const max = ['top', 'bottom', 'dress'].includes(slotOf(c)) ? 2.4 : 1;
+  return max * (1 - Math.exp(-w / 1.5));
 }
 
 /** Like a person skipping what they wore a day or two ago: pieces worn very recently are pushed back (not the chosen core). */
@@ -961,33 +986,38 @@ const REUSED = new Set(['outer', 'shoes']);
 function pickBest(cands, scoreFn, avoid, jitter = 0.5) {
   let best = null, bs = -Infinity;
   for (const c of cands) {
-    let s = scoreFn(c) + learnedItem(c) + rotation(c) - shownPenalty(c) + Math.random() * jitter * JIT;
+    let s = scoreFn(c) + learnedItem(c) + rotation(c) - shownPenalty(c) - seenPenalty(c) + Math.random() * jitter * JIT;
     if (avoid.has(c.id)) s -= REUSED.has(slotOf(c)) ? 2 : 6;
     if (s > bs) { bs = s; best = c; }
   }
   return best;
 }
 
-/** Pick a random but sensible core: a dress, or top + bottom. */
-export function pickSurpriseCore(items) {
+/** Pick a random but sensible core: a dress, or top + bottom — leaning towards pieces not seen lately. seen: the seen-lately log. */
+export function pickSurpriseCore(items, seen = null) {
+  const map = seen ? seenWeights(seen) : SEEN, stale = c => seenPenalty(c, map);
   const by = c => items.filter(i => i.category === c);
   const dresses = by('dresses'), tops = by('tops'), bottoms = by('bottoms');
-  const options = [];
-  if (dresses.length) options.push('dress');
-  if (tops.length && bottoms.length) options.push('pair');
-  if (!options.length) {
-    const any = [...tops, ...bottoms, ...dresses, ...by('outerwear')];
+  const pairs = tops.length && bottoms.length;
+  if (!dresses.length && !pairs) {
+    const any = [...tops, ...bottoms, ...by('outerwear')];
     return any.length ? [any[Math.floor(Math.random() * any.length)].id] : [];
   }
-  const choice = options[Math.floor(Math.random() * options.length)];
   const rnd = arr => arr[Math.floor(Math.random() * arr.length)];
-  if (choice === 'dress') return [rnd(dresses).id];
+  // a dress is one piece, a top and a bottom are two: dresses come up as often as the closet has them, not every other time
+  const pDress = pairs ? dresses.length / (dresses.length + (tops.length + bottoms.length) / 2) : 1;
+  if (Math.random() < pDress) {
+    let best = null, bs = -Infinity;
+    for (const d of dresses) { const s = Math.random() * 1.5 - stale(d); if (s > bs) { bs = s; best = d; } }
+    return [best.id];
+  }
   // choose a pair with decent proportions rather than a pure coin flip
   const mood = interpretMood();
   let best = null, bs = -Infinity;
   for (let n = 0; n < 12; n++) {
     const t = rnd(tops), b = rnd(bottoms);
-    const s = proportionScore(t, b, 'classic') + pairScore(t, b, mood, 'classic') + partFit('legs', [b]) + 0.5 * partFit('torso', [t]) + Math.random();
+    const s = proportionScore(t, b, 'classic') + pairScore(t, b, mood, 'classic') + partFit('legs', [b]) + 0.5 * partFit('torso', [t]) + Math.random()
+      - stale(t) - stale(b);
     if (s > bs) { bs = s; best = [t.id, b.id]; }
   }
   return best;
@@ -1071,7 +1101,11 @@ function completeOutfit(core, items, mood, intent, avoid) {
   if (!o.dress && o.top.length && o.bottom) {
     const torsoFit = tops => partFit('torso', tops);
     const needLayer = torsoFit(o.top) < -0.5;                    // too thin on its own for the time of year, or for what they taught
-    const maxTops = intent === 'editorial' ? (COLD ? 3 : 2) : (COLD || needLayer || isSleeveless(o.top[0]) ? 2 : 1);
+    const must = needLayer || isSleeveless(o.top[0]);
+    let maxTops = intent === 'editorial' ? (COLD ? 3 : 2) : (COLD || must ? 2 : 1);
+    // a layer it does not need is a choice, not a rule: some tries go without it and the mirror check judges both,
+    // so the one cardigan or blazer that fits over everything is not in every look
+    if (JIT > 0 && Math.random() < 0.4) maxTops = Math.max(o.top.length, must ? 2 : 1, maxTops - 1);
     while (o.top.length < maxTops) {
       const visible = o.top[o.top.length - 1];
       const layer = pickBest(
@@ -1392,7 +1426,8 @@ const DRESS_FABRIC = { Satin: 1, Silk: 0.8, Velvet: 0.8, Lace: 0.6, 'Sequin / Me
   Denim: -0.3, Fleece: -1, 'Jersey / Knit': -0.3, Canvas: -0.4, Corduroy: -0.2, 'Padded / Down': -0.3, Acrylic: -0.2, Linen: -0.2 };
 const DRESS_VIBE = { Evening: 0.8, Glam: 0.8, Office: 0.4, Elevated: 0.3, 'Old-Money': 0.3, Classic: 0.2,
   Casual: -0.5, Cozy: -0.4, Streetwear: -0.6, 'Sporty-Luxe': -0.4, Bohemian: -0.2 };
-const DRESS_NAME = [[/\b(sweat|hoodie|jogger|track)/i, -1.2], [/\b(tailored|pleated|pencil|pressed)/i, 0.4], [/\b(oversized|ripped|distressed|graphic)/i, -0.5]];
+// "sweat" is a sweatshirt or sweatpants, not a sweater
+const DRESS_NAME = [[/\b(sweat(?!er)|hoodie|jogger|track)/i, -1.2], [/\b(tailored|pleated|pencil|pressed)/i, 0.4], [/\b(oversized|ripped|distressed|graphic)/i, -0.5]];
 
 /** 1 (lounge) … 5 (dressy), worked out from the type, fabric, vibe and name. */
 export function defaultDressiness(item) { return Math.max(1, Math.min(5, Math.round(dressinessRaw(item)))); }
@@ -1510,11 +1545,11 @@ function mirrorCheck(core, pool, mood, intent, avoid, target, shown = new Set(),
     if (seen.has(key)) continue;
     if (shown.has(key)) { skipped.push(o); continue; }         // Restyle: already shown, look further
     const overlap = outfitPieces(o).filter(p => avoid.has(p.id)).reduce((t, p) => t + (REUSED.has(slotOf(p)) ? 0.35 : 1), 0);
-    const repeat = outfitPieces(o).reduce((t, p) => t + shownPenalty(p), 0);
+    const repeat = outfitPieces(o).reduce((t, p) => t + shownPenalty(p) + seenPenalty(p), 0);
     seen.set(key, { o, score: outfitScore(o, mood, intent, target) - overlap * 2 - repeat });
   }
   JIT = 1;
-  if (!seen.size && skipped.length) skipped.forEach(o => seen.set(outfitKey(o), { o, score: outfitScore(o, mood, intent, target) - outfitPieces(o).reduce((t, p) => t + shownPenalty(p), 0) }));   // all shown: the least-repeated comes back first
+  if (!seen.size && skipped.length) skipped.forEach(o => seen.set(outfitKey(o), { o, score: outfitScore(o, mood, intent, target) - outfitPieces(o).reduce((t, p) => t + shownPenalty(p) + seenPenalty(p), 0) }));   // all shown: the least-repeated comes back first
   return [...seen.values()].sort((a, b) => b.score - a.score);
 }
 
@@ -1522,7 +1557,7 @@ function mirrorCheck(core, pool, mood, intent, avoid, target, shown = new Set(),
  * Build exactly two looks.
  * items: all closet items. coreIds: >=1 chosen item ids. finish: { belt, jewelry, hair, nails, makeup, perfume } (items or null).
  */
-export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {}, history = null, occasion = '', shown = [], month = null, date = null }) {
+export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {}, history = null, occasion = '', shown = [], seen = [], month = null, date = null }) {
   const when = date ?? (month == null ? Date.now() : new Date(new Date().getFullYear(), month, 15).getTime());
   const mon = new Date(when).getMonth();
   LEARN = history;
@@ -1566,6 +1601,7 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodC
   const shownKeys = new Set(shown);
   SHOWN = new Map();
   shown.forEach(k => String(k).split('|').forEach(id => { if (id && !CORE_IDS.has(id)) SHOWN.set(id, (SHOWN.get(id) || 0) + 1); }));
+  SEEN = seenWeights(seen, date ?? Date.now());
   const c1 = mirrorCheck(core, pool, mood, 'classic', none, target + 0.3, shownKeys);   // the classic look leans a touch more polished
   const o1 = c1[0].o;
   const used = new Set([...outfitPieces(o1), ...o1.jewelry].map(i => i.id));
@@ -1590,9 +1626,12 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodC
     classic: [look1, ...c1.slice(1, 5).map(c => mk(c, T1, f1, 'classic'))],
     editorial: [look2, ...c2.slice(1, 5).map(c => mk(c, T2, f2, 'editorial'))]
   };
-  CORE_IDS = new Set(); SHOWN = new Map();
+  // what they have seen a lot lately, for an AI stylist choosing between close outfits
+  const clothesById = new Map(items.filter(i => CLOTHING_SLOTS.has(slotOf(i))).map(i => [i.id, i]));
+  const recentlySeen = [...SEEN].filter(([id, w]) => w >= 0.7 && clothesById.has(id) && !CORE_IDS.has(id)).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => id);
+  CORE_IDS = new Set(); SHOWN = new Map(); SEEN = new Map();
   return { mood: mood.key, feeling: mood.feeling, occasion: occ?.label || '', season: COLD ? 'cold months' : warm ? 'warm months' : 'mild weather',
-    level: DRESSINESS[Math.max(0, Math.min(4, Math.round(target) - 1))], warnings: [...new Set([...o1.warnings, ...warnings])], looks: [look1, look2], alternatives };
+    level: DRESSINESS[Math.max(0, Math.min(4, Math.round(target) - 1))], warnings: [...new Set([...o1.warnings, ...warnings])], looks: [look1, look2], alternatives, recentlySeen };
 }
 
 /* ======================================================================

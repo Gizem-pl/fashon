@@ -15,7 +15,8 @@ const LS = {
   wears: 'qc.wears.v1',
   ai: 'qc.ai.v1',
   chat: 'qc.chat.v1',
-  votes: 'qc.votes.v1'
+  votes: 'qc.votes.v1',
+  seen: 'qc.seen.v1'
 };
 const DB_NAME = 'quiet-closet';
 const DB_VERSION = 1;
@@ -114,6 +115,29 @@ export function setVoteReasons(key, patch) {
   if (!v) return false;
   Object.assign(v, patch);
   return write(LS.votes, list);
+}
+
+/* ---------- Seen lately: [{ at, key (outfit key), ids (every piece in the look) }], one per look the Studio showed.
+   Only the last two weeks are kept; it lets the next visit open on pieces not seen lately. Not part of a backup. ---------- */
+
+const SEEN_DAYS = 14;
+export function getSeen() {
+  const since = Date.now() - SEEN_DAYS * 864e5;
+  return read(LS.seen, []).filter(e => (e.at || 0) >= since);
+}
+export function markSeen(looks = []) {
+  const at = Date.now();
+  return write(LS.seen, [...getSeen(), ...looks.filter(l => l?.key).map(l => ({ at, key: l.key, ids: l.itemIds || l.pieceIds || [] }))].slice(-400));
+}
+/** The AI stylist swapped a look for another one: remember the one actually shown. */
+export function swapSeen(oldKey, look) {
+  const list = getSeen();
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].key !== oldKey) continue;
+    list[i] = { at: list[i].at, key: look.key, ids: look.itemIds || look.pieceIds || [] };
+    return write(LS.seen, list);
+  }
+  return false;
 }
 
 /* ---------- AI stylist settings: { key, model }. Stays on this device and is never put in a backup. ---------- */
