@@ -360,19 +360,150 @@ function isNeutral(hex) {
   const { s, l } = rgbToHsl(r, g, b);
   return s < 0.2 || l < 0.12 || l > 0.92;
 }
-function hueOf(hex) { const { r, g, b } = hexToRgb(hex); return rgbToHsl(r, g, b).h; }
-function hueDiff(a, b) { const d = Math.abs(hueOf(a) - hueOf(b)); return Math.min(d, 360 - d); }
+/* ---------- Which colours go together ----------
+   A stylist reads two colours side by side in this order:
+   1. Known pairings. The classics (navy & camel, black & grey, chocolate & cream, burgundy & navy …) and the known misses:
+      black next to dark brown or navy (two darks that almost match look like a mistake), an off-white (ivory, cream) next to
+      bright white (the off-white looks dingy), and red with green (festive).
+   2. Otherwise, rules. Every colour has a temperature: warm (cream, camel, brown, olive, rust, mustard), cool (white, grey,
+      cobalt, pink, lilac) or both (black, navy, denim, taupe, red, burgundy). Neutrals of one temperature always work together;
+      a warm and a cool neutral are fine but flatter. A neutral carries any colour, best one of its own temperature. Two colours
+      work as shades of one colour or as neighbours on the colour wheel; soft opposites can work, loud colours compete.
+   3. Contrast. Black against white or cream is the starkest contrast there is. When the light piece is wool or a knit it never
+      works, whatever the mood: soft fabric wants soft contrast, and light wool sheds onto black. With a crisp white (a poplin
+      shirt, a tee) it reads graphic: harsh in a soft, quiet look, fine in a sharp one (Sharp & Confident).
+   A clear miss counts on its own in the whole outfit (see COLOUR_MISS), and what they taught always wins over these rules.
+   Jewelry and other small things only follow temperature: gold with warm colours, silver with cool.
+   A colour is read from its name, so a photo taken in dim light still counts as the black or white it is. */
 
-/** Harmony score between two colours: neutrals pair with anything, analogous works, clashing saturated pairs lose. */
+// temperature (w warm · c cool · b both) and role (n neutral · a accent)
+const COLOUR_INFO = {
+  ivory: 'wn', cream: 'wn', oatmeal: 'wn', beige: 'wn', sand: 'wn', camel: 'wn', tan: 'wn', khaki: 'wn', olive: 'wn',
+  mocha: 'wn', brown: 'wn', chocolate: 'wn', espresso: 'wn', gold: 'wn',
+  white: 'cn', 'pale grey': 'cn', 'light grey': 'cn', grey: 'cn', charcoal: 'cn', silver: 'cn',
+  black: 'bn', navy: 'bn', 'denim blue': 'bn', stone: 'bn', taupe: 'bn',
+  rust: 'wa', terracotta: 'wa', orange: 'wa', coral: 'wa', peach: 'wa', mustard: 'wa', 'butter yellow': 'wa', blush: 'wa',
+  'sky blue': 'ca', 'light blue': 'ca', cobalt: 'ca', emerald: 'ca', mint: 'ca', pink: 'ca', fuchsia: 'ca', lilac: 'ca', lavender: 'ca', plum: 'ca',
+  red: 'ba', burgundy: 'ba', wine: 'ba', teal: 'ba', 'forest green': 'ba', sage: 'ba', 'dusty rose': 'ba'
+};
+/** Typed colour names that mean one of the palette colours: specific names first ("off-white" is not white),
+    then the palette words inside a name ("soft camel"), then plain words ("blue"). */
+const COLOUR_ALIASES = [
+  [/off[- ]?white|ecru|eggshell|winter white|\bbone\b|natural|vanilla|alabaster|porcelain/, 'ivory'], [/\b(?:jet|onyx|ebony|noir)\b/, 'black'],
+  [/oxblood|bordeaux|maroon|merlot/, 'burgundy'], [/cognac|chestnut|caramel|toffee|cinnamon/, 'tan'], [/coffee|walnut/, 'brown'],
+  [/greige|mushroom/, 'taupe'], [/heather|slate|\bash\b/, 'grey'], [/anthracite|graphite/, 'charcoal'], [/indigo|chambray|\bdenim\b/, 'denim blue'],
+  [/powder blue|baby blue|ice blue/, 'light blue'], [/royal blue|electric blue/, 'cobalt'], [/bottle green|hunter green/, 'forest green'],
+  [/army green|military/, 'olive'], [/cherry/, 'red']
+];
+const COLOUR_WORDS_PLAIN = [[/\bgrey\b/, 'grey'], [/\bblue\b/, 'denim blue'], [/\bgreen\b/, 'forest green'], [/\bpurple\b/, 'plum'], [/\byellow\b/, 'butter yellow']];
+const PALETTE = new Map(COLOR_NAMES.map(([n, h]) => [lc(n), h]));
+const PALETTE_WORDS = [...PALETTE.keys()].sort((a, b) => b.length - a.length);
+function paletteName(color) {
+  const t = lc(color?.name).trim().replace(/gray/g, 'grey');
+  if (PALETTE.has(t)) return t;
+  if (t) {
+    const al = COLOUR_ALIASES.find(([re]) => re.test(t)); if (al) return al[1];
+    const w = PALETTE_WORDS.find(w => new RegExp(`\\b${w}\\b`).test(t)); if (w) return w;
+    const pl = COLOUR_WORDS_PLAIN.find(([re]) => re.test(t)); if (pl) return pl[1];
+  }
+  return color?.hex ? lc(colorName(color.hex)) : '';
+}
+const INFO_CACHE = new Map();
+/** { name, temp, neutral, fam, L, C, h } for a piece's colour, or null without one. */
+function colourInfo(p) {
+  const c = p?.color; if (!c?.name && !c?.hex) return null;
+  const key = `${c.name || ''}|${c.hex || ''}`;
+  if (INFO_CACHE.has(key)) return INFO_CACHE.get(key);
+  const name = paletteName(c);
+  if (!name) return null;
+  const code = COLOUR_INFO[name] || 'bn';
+  const { r, g, b } = hexToRgb(PALETTE.get(name) || c.hex);
+  const [L, A, B] = rgbToLab(r, g, b);
+  const info = { name, temp: code[0], neutral: code[1] === 'n', fam: COLOUR_FAMILY[name] || '', L, C: Math.hypot(A, B), h: (Math.atan2(B, A) * 180 / Math.PI + 360) % 360 };
+  INFO_CACHE.set(key, info);
+  return info;
+}
+
+const CG = {
+  creams: ['ivory', 'cream', 'oatmeal', 'beige', 'sand', 'stone'], camels: ['camel', 'tan', 'khaki'], browns: ['brown', 'chocolate', 'espresso', 'mocha'],
+  greys: ['grey', 'charcoal', 'light grey', 'pale grey'], blues: ['sky blue', 'light blue'], wines: ['burgundy', 'wine'], rusts: ['rust', 'terracotta'],
+  greens: ['olive', 'forest green'], pinks: ['blush', 'dusty rose', 'pink'], lilacs: ['lilac', 'lavender', 'plum']
+};
+const expandCG = s => s.split(' ').flatMap(w => CG[w] || [w.replace(/_/g, ' ')]);
+/** [colours, partners, score, reason]: the classics first, the misses last (a miss wins over a classic). */
+const PAIRINGS = [
+  ['navy', 'camels creams white greys blues wines red pinks mustard rusts brown denim_blue forest_green', 1.4],
+  ['black', 'camels greys red wines pinks cobalt emerald gold silver', 1.4],
+  ['camels', 'creams white browns greys denim_blue wines greens rusts pinks blues teal', 1.4],
+  ['browns', 'creams blues denim_blue rusts greens sage mustard pinks teal', 1.3],
+  ['greys', 'white wines pinks lilacs mustard butter_yellow blues cobalt red', 1.3],
+  ['greys', 'ivory cream oatmeal', 1.1],
+  ['creams', 'greens sage rusts wines denim_blue blues pinks mustard lilacs', 1.3],
+  ['white', 'denim_blue blues cobalt red mint lilacs', 1.3],
+  ['denim_blue', 'rusts red mustard pinks sage greens', 1.2],
+  ['wines', 'pinks greens', 1.2], ['greens', 'rusts mustard', 1.2], ['rusts', 'teal', 1.1], ['sage', 'lilacs pinks', 1.1], ['mustard', 'plum lilac', 1.1],
+  ['black', 'brown chocolate espresso', -1.0, 'dark'], ['black', 'navy', -0.8, 'dark'], ['navy', 'chocolate espresso', -0.4, 'dark'],
+  ['white', 'ivory cream oatmeal', -0.8, 'whites'], ['red', 'forest_green emerald', -0.8, 'festive']
+];
+const ckey = (a, b) => a < b ? a + '|' + b : b + '|' + a;
+const PAIR_TABLE = new Map();
+for (const [as, bs, s, why = 'classic'] of PAIRINGS)
+  for (const a of expandCG(as)) for (const b of expandCG(bs)) if (a !== b) PAIR_TABLE.set(ckey(a, b), { s, why });
+
+const fitsTemp = (a, b) => a.temp === b.temp || a.temp === 'b' || b.temp === 'b';
+/** The pairing itself, before contrast: a known pairing, or the rules. */
+function colourRule(a, b) {
+  if (a.name === b.name) return { s: a.neutral ? 1 : 0.6, why: 'same' };
+  const known = PAIR_TABLE.get(ckey(a.name, b.name)); if (known) return known;
+  const fits = fitsTemp(a, b);
+  if (a.neutral && b.neutral) return { s: fits ? 1 : 0.4, why: fits ? 'neutrals' : 'mixed-neutrals' };
+  if (a.neutral || b.neutral) return { s: fits ? 1.1 : 0.6, why: 'carries' };
+  if (a.fam && a.fam === b.fam) return { s: 0.8, why: 'tonal' };
+  const d = Math.min(Math.abs(a.h - b.h), 360 - Math.abs(a.h - b.h));
+  const loud = (a.C >= 45) + (b.C >= 45);
+  if (d < 40) return { s: loud === 2 ? 0.3 : 0.6, why: 'neighbours' };
+  if (d >= 130) return { s: [0.3, -0.4, -1][loud], why: loud ? 'loud' : 'soft-opposites' };
+  if (!loud && a.L > 70 && b.L > 70) return { s: 0, why: 'pastels' };
+  return { s: [-0.6, -1.2, -1.8][loud], why: 'clash' };
+}
+/** 0 … 1: how close two colours come to black against white. Navy or espresso against white is crisp, not harsh. */
+function starkness(a, b) {
+  const [d, l] = a.L <= b.L ? [a, b] : [b, a];
+  if (!d.neutral || !l.neutral || d.temp === 'w' || d.C > 10) return 0;
+  return Math.max(0, Math.min(1, (l.L - d.L - 68) / 16));
+}
+const SOFT_FABRICS = new Set(['Wool', 'Cashmere', 'Tweed', 'Faux fur', 'Fleece', 'Acrylic']);
+/** Wool, a knit, bouclé or fur: soft, and it sheds. */
+function softWool(p) {
+  const f = fabricInfo(p?.fabric); if (f) return SOFT_FABRICS.has(f.label);
+  return /knit|sweater|jumper|cardigan|turtleneck|wool|mohair|cashmere|alpaca|angora|boucl/i.test(`${p?.subtype || ''} ${p?.name || ''}`);
+}
+const isAccessory = p => !!p?.category && !['tops', 'bottoms', 'dresses', 'outerwear', 'shoes'].includes(p.category);
+
+/** How well two pieces' colours go together, about −3 … +1.4, with the reason. mood (from interpretMood) is optional. */
+export function colourMatch(p, q, mood = null) {
+  const a = colourInfo(p), b = colourInfo(q);
+  if (!a || !b) return { s: 0, why: '' };
+  if (isAccessory(p) || isAccessory(q)) return { s: a.name === b.name || fitsTemp(a, b) ? 1 : 0.4, why: 'temperature' };
+  const r = colourRule(a, b), st = starkness(a, b);
+  if (!st) return r;
+  // with light wool or a knit it never works, in any mood: harsh against the soft fabric, and the wool sheds onto black.
+  // With a crisp white (a poplin shirt, a tee) it is graphic: harsh in a soft, quiet look, fine in a sharp one.
+  if (softWool(a.L > b.L ? p : q)) return { s: r.s - 3 * st, why: 'stark-wool' };
+  const graphic = !!mood && !mood.tonal && (mood.vibes || []).includes('Edgy');
+  return { s: r.s - st * (graphic ? 0.2 : 1.2), why: 'stark' };
+}
+/** The same rules in words, for the AI stylist. */
+export const COLOUR_RULES = [
+  '- Colours: neutrals of one temperature go together (warm: ivory, cream, beige, camel, brown, olive; cool: white, grey; black, navy and denim go both ways). A neutral carries one accent colour; two accents only when they are shades of one colour or neighbours on the colour wheel.',
+  '- Classic pairings: navy & camel, navy & cream, black & camel, black & grey, grey & camel, chocolate & cream, burgundy & navy, olive & cream, rust & denim.',
+  '- Never put black against white or cream wool or knits (harsh, and light wool sheds onto black). Black with a crisp white shirt or tee only for a sharp, graphic look. Avoid black right next to dark brown or navy, cream or ivory next to bright white, and red with green.'
+].join('\n');
+
+/** The same for two bare colours. */
 export function harmony(hexA, hexB) {
   if (!hexA || !hexB) return 0;
-  const na = isNeutral(hexA), nb = isNeutral(hexB);
-  if (na && nb) return 1.2;
-  if (na || nb) return 1;
-  const d = hueDiff(hexA, hexB);
-  if (d < 40) return 1;
-  if (d > 150) return 0.4;       // complementary: strong but fine
-  return -1.2;                    // awkward mid-angle clash
+  return colourMatch({ color: { hex: hexA } }, { color: { hex: hexB } }).s;
 }
 
 /* ---------- Naming ---------- */
@@ -521,7 +652,7 @@ function sheenScore(a, b) {
 }
 
 function pairScore(a, b, mood, intent) {
-  return contrastScore(a, b, intent) + harmony(a.color?.hex, b.color?.hex) + vibeScore(b, mood) + sheenScore(a, b) + learnedPair(a, b);
+  return contrastScore(a, b, intent) + colourMatch(a, b, mood).s + vibeScore(b, mood) + sheenScore(a, b) + learnedPair(a, b);
 }
 
 /* ---------- Learning: the outfit diary and the quick 👍 / 👎 on suggested looks ----------
@@ -880,7 +1011,8 @@ function rotation(c) {
   return days < 2.5 ? -2 : days < 5 ? -0.8 : 0;
 }
 
-function learnedPair(a, b) {
+/** What they taught about two pieces. colour = false leaves out the colours (the outfit judges those with colourMatch). */
+function learnedPair(a, b, colour = true) {
   if (!LEARN || !a || !b) return 0;
   const k = pairKey(a.id, b.id);
   let s = clampAbs(LEARN.pair.get(k) || 0, 4);
@@ -888,6 +1020,12 @@ function learnedPair(a, b) {
   const top = slotOf(a) === 'top' ? a : slotOf(b) === 'top' ? b : null;
   const bottom = slotOf(a) === 'bottom' ? a : slotOf(b) === 'bottom' ? b : null;
   if (top && bottom) s += clampAbs(LEARN.shape.get(`${top.silhouette}|${bottom.silhouette}`) || 0, 3);
+  return s + (colour ? learnedColour(a, b) : 0);
+}
+/** Colours they said clash or work together, by name and more gently by family. Their verdict beats the rules. */
+function learnedColour(a, b) {
+  if (!LEARN || !a || !b) return 0;
+  let s = 0;
   const ca = lc(a.color?.name), cb = lc(b.color?.name);
   if (ca && cb && ca !== cb) s += clampAbs(LEARN.colour.get(pairKey(ca, cb)) || 0, 3);
   const fa = familyOf(a), fb = familyOf(b);
@@ -1056,7 +1194,7 @@ function pickJewelry(o, items, mood, intent, avoid) {
   const anchor = o.top[o.top.length - 1] || o.dress || o.bottom;
   const cands = items.filter(i => i.category === 'jewelry' && jewelKind(i) && !(high && jewelKind(i) === 'Necklace'));
   if (!cands.length) return [];
-  const base = j => vibeScore(j, mood) + (anchor ? harmony(j.color?.hex, anchor.color?.hex) * 0.5 : 0);
+  const base = j => vibeScore(j, mood) + (anchor ? colourMatch(j, anchor, mood).s * 0.5 : 0);
   const kindPref = { Earrings: 1, Necklace: intent === 'classic' ? 0.6 : 0.8, 'Bracelet / Watch': 0.4, Ring: 0.2 };
   const first = pickBest(cands, j => base(j) + kindPref[jewelKind(j)], avoid, 0.8);
   if (!first) return [];
@@ -1123,11 +1261,13 @@ function completeOutfit(core, items, mood, intent, avoid) {
 
   if (!o.outer && pool('outer').length && base) {
     const under = o.dress ? [o.dress] : o.top;
-    o.outer = pickBest(pool('outer'), c => pairScore(c, anchor, mood, intent) + outerLayerPenalty(under, c) + (intent === 'classic' && c.silhouette === 'Relaxed' ? 0.5 : 0) + partFit('outer', [c]), avoid, 0.7);
+    const neckline = under[under.length - 1];   // what shows at the collar and front of an open coat
+    o.outer = pickBest(pool('outer'), c => pairScore(c, anchor, mood, intent) + (neckline && neckline !== anchor ? colourMatch(c, neckline, mood).s * 0.8 : 0)
+      + outerLayerPenalty(under, c) + (intent === 'classic' && c.silhouette === 'Relaxed' ? 0.5 : 0) + partFit('outer', [c]), avoid, 0.7);
     if (o.outer && outerLayerPenalty(under, o.outer) <= -8) o.outer = null;   // would not sit over what is underneath: skip it
   }
   if (!o.shoes && pool('shoes').length && base) {
-    o.shoes = pickBest(pool('shoes'), s => harmony(s.color?.hex, anchor.color?.hex) + (intent === 'classic' && s.contrast === 'Dark' ? 1 : 0) + vibeScore(s, mood) + learnedPair(s, anchor) + partFit('feet', [s]), avoid, 0.7);
+    o.shoes = pickBest(pool('shoes'), s => colourMatch(s, anchor, mood).s + (intent === 'classic' && s.contrast === 'Dark' ? 1 : 0) + vibeScore(s, mood) + learnedPair(s, anchor) + partFit('feet', [s]), avoid, 0.7);
   }
   o.jewelry = pickJewelry(o, items, mood, intent, avoid);
   return o;
@@ -1237,15 +1377,48 @@ function layeringLine(tops) {
   return `Wear ${nm(inner)} under ${nm(outer)} and let the collar and cuffs peek out at the neck and wrists.`;
 }
 
-function contrastNote(o) {
-  const a = o.dress || o.top[0], b = o.bottom;
-  if (a && b) {
-    const gap = contrastGap(a, b);
-    if (gap === 2) return `${a.contrast} ${lc(nm(a))} against ${b.contrast.toLowerCase()} ${lc(nm(b))} gives a crisp light-to-dark balance.`;
-    if (gap === 1) return `${a.contrast}-to-${b.contrast.toLowerCase()} contrast keeps the look balanced without feeling heavy.`;
-    return `Both pieces sit in the ${a.contrast.toLowerCase()} range, so the outfit reads tonal and seamless — lift it with texture and one contrasting accessory.`;
-  }
-  return '';
+/** One sentence on why two colours work (or do not), in the words a stylist would use. */
+function colourSentence(p, q, mood) {
+  const a = colourInfo(p), b = colourInfo(q); if (!a || !b) return '';
+  const m = colourMatch(p, q, mood);
+  const cn = (x, i) => lc(x.color?.name) || i.name, A = cn(p, a), B = cn(q, b);
+  const [N, X] = a.neutral ? [A, B] : [B, A];
+  const temp = a.temp === b.temp && a.temp !== 'b' ? (a.temp === 'w' ? 'warm' : 'cool') : '';
+  const [D, Lt, lp] = a.L <= b.L ? [A, B, q] : [B, A, p], fw = lc(fabricInfo(lp.fabric)?.label || 'knit');
+  const text = {
+    classic: `${A} with ${B} is a classic pairing`,
+    same: a.neutral ? `${A} head to toe reads long and calm` : `two pieces in ${A} — keep everything else neutral`,
+    neutrals: temp ? `${A} and ${B} are both ${temp} neutrals, so the look reads calm and of a piece` : `${A} and ${B} are easy neutrals together`,
+    'mixed-neutrals': `${A} and ${B} mix a warm and a cool neutral — repeat one of them in the shoes or bag to tie the look together`,
+    carries: `${N} lets the ${X} lead`,
+    tonal: `${A} and ${B} are shades of one colour, so the look reads rich and tonal`,
+    neighbours: `${A} and ${B} sit next to each other on the colour wheel, so they blend`,
+    'soft-opposites': `${A} and ${B} are soft opposites — each makes the other glow`,
+    loud: `${A} and ${B} are both strong — let one lead and keep the rest neutral`,
+    pastels: `${A} and ${B} are both soft and light — keep the rest of the look light too`,
+    clash: `${A} and ${B} compete — let one lead and keep the rest neutral`,
+    dark: `${A} next to ${B}: two darks that almost match can look like a mistake — something lighter between them helps`,
+    whites: `${A} next to ${B}: beside bright white an off-white can look dingy`,
+    festive: `${A} with ${B} can read festive`,
+    stark: `${D} against ${Lt} is the starkest contrast there is — it reads graphic rather than soft`,
+    'stark-wool': `${D} against ${Lt} ${fw} is harsh: soft ${fw} wants soft contrast, and light ${fw} sheds onto ${D}`
+  }[m.why] || '';
+  if (!text) return '';
+  const gap = contrastGap(p, q);
+  const depth = /^stark|dark|whites/.test(m.why) ? '' : gap === 2 ? ', and light against dark keeps it crisp' : gap === 1 ? ', with a gentle step from light to dark' : '';
+  return text.charAt(0).toUpperCase() + text.slice(1) + depth + '.';
+}
+
+/** The colours of the main pairing (top and bottom, or a dress and its coat), and the coat if it adds something worth saying. */
+function colourNote(o, mood) {
+  const top = o.top[o.top.length - 1];
+  const main = top && o.bottom ? [top, o.bottom] : o.dress && o.outer ? [o.dress, o.outer] : o.dress && o.shoes ? [o.dress, o.shoes] : null;
+  if (!main) return '';
+  const lines = [colourSentence(main[0], main[1], mood)];
+  const under = o.dress || top;
+  if (o.outer && under && !main.includes(o.outer) && /^(stark|dark|whites|classic)/.test(colourMatch(o.outer, under, mood).why))
+    lines.push(colourSentence(o.outer, under, mood));
+  return [...new Set(lines.filter(Boolean))].join(' ');
 }
 
 function fabricNote(o) {
@@ -1376,7 +1549,7 @@ function buildLookObject(title, tagline, outfit, finish, mood, intent, occasion 
   const notes = [
     { label: 'From your outfit diary', text: diaryNote(pieces) },
     { label: 'Proportion & tuck', text: proportionNote(outfit, intent) },
-    { label: 'Colour balance',    text: contrastNote(outfit) },
+    { label: 'Colour balance',    text: colourNote(outfit, mood) },
     { label: 'Fabric & texture',  text: fabricNote(outfit) },
     { label: 'Layering',          text: layerNote(outfit, mood) },
     { label: 'Legwear',           text: finish.legwear ? `${nm(finish.legwear)} links the shoes to the hem — keep it close to the ${finish.legwear.color?.name ? finish.legwear.color.name.toLowerCase() : 'palette'} of the look.` : '' },
@@ -1484,10 +1657,26 @@ function colourStoryScore(pieces, mood) {
   else if (fams.size === 1) s += 1.4;                              // one accent colour: the classic recipe
   else if (fams.size === 2) {
     const [a, b] = accents.slice(0, 2);
-    s += harmony(a.color.hex, b.color.hex) > 0.5 ? -0.6 : -2;   // two accents: only when they really get along
+    s += colourMatch(a, b, mood).s > 0.5 ? -0.6 : -2;            // two accents: only when they really get along
   } else s -= 3 * (fams.size - 2);                                 // three or more accents: too many colours
   if (accents.length === main.length) s -= 1.5;                     // no neutral to rest the eye
   return s;
+}
+
+/* A colour miss counts on its own, strongly enough that Restyle repeats a good pairing with other shoes or another coat
+   before it reaches for one that does not go: "new" should never mean "wrong". Only a real miss: a slightly-off pair
+   (navy trousers with espresso boots, black boots far from a cream knit) is left to the average. */
+const COLOUR_MISS = 3;
+
+/** How much of a pair you see side by side: top and bottom fully, the coat a little less, shoes mostly against the hem,
+    and a layer underneath only at the collar and cuffs. */
+function pairWeight(o, a, b) {
+  const sa = slotOf(a), sb = slotOf(b);
+  let w = 1;
+  if (sa === 'shoes' || sb === 'shoes') w = [sa, sb].some(x => x === 'bottom' || x === 'dress') ? 0.7 : 0.15;
+  else if (sa === 'outer' || sb === 'outer') w = 0.8;
+  const under = p => o.top.indexOf(p) >= 0 && o.top.indexOf(p) < o.top.length - 1;
+  return under(a) || under(b) ? w * 0.5 : w;
 }
 
 /** Every pair of pieces, not only each piece against one anchor. */
@@ -1509,9 +1698,13 @@ function outfitScore(o, mood, intent, target) {
   s -= Math.abs(mean - target) * 1.2;
   // colour story
   s += colourStoryScore(clothes.concat(o.shoes ? [o.shoes] : []), mood) * 1.2;
-  // pairs: harmony, sheen and what the diary / votes taught
+  // colour pairs, weighted by how much of each you see; one jarring pair stands out however well the rest goes together
   const pairs = allPairs(pieces);
-  if (pairs.length) s += pairs.reduce((t, [a, b]) => t + harmony(a.color?.hex, b.color?.hex) * 0.5 + sheenScore(a, b) + learnedPair(a, b) * 0.6, 0) / Math.sqrt(pairs.length);
+  // (what they taught about colours is part of it, so a pairing they love is never blocked by the rules)
+  const cp = pairs.map(([a, b]) => [colourMatch(a, b, mood).s + learnedColour(a, b), pairWeight(o, a, b)]), cw = cp.reduce((t, [, w]) => t + w, 0);
+  if (cw) s += 1.2 * cp.reduce((t, [c, w]) => t + c * w, 0) / cw + COLOUR_MISS * Math.min(0, 0.3 + Math.min(...cp.map(([c, w]) => c * w)));
+  // pairs: sheen and what the diary / votes taught about the pieces themselves
+  if (pairs.length) s += pairs.reduce((t, [a, b]) => t + sheenScore(a, b) + learnedPair(a, b, false) * 0.6, 0) / Math.sqrt(pairs.length);
   // proportion and contrast of the main pairing
   const top = o.top[o.top.length - 1];
   if (top && o.bottom) s += proportionScore(top, o.bottom, intent) * 1.1 + contrastScore(top, o.bottom, intent) * 0.6;
@@ -2016,9 +2209,9 @@ export function matchCloset(items, newPiece) {
     const pool = items.filter(i => i.category === catId);
     const scored = pool.map(i => {
       let s = 0; const why = [];
-      const h = fake.color ? harmony(fake.color.hex, i.color?.hex) : 0.5;
-      if (h >= 1) why.push(fake.color && isNeutral(i.color.hex) ? 'neutral partner' : 'harmonious colour');
-      if (h < 0) why.push('colour may clash');
+      const m = fake.color ? colourMatch(fake, i, mood) : { s: 0.5, why: '' }, h = m.s;
+      if (h >= 1) why.push(m.why === 'classic' ? 'classic colour pairing' : colourInfo(i)?.neutral ? 'neutral partner' : 'harmonious colour');
+      if (h < 0) why.push(/^stark/.test(m.why) ? 'stark contrast' : 'colour may clash');
       s += h;
       if (['tops', 'bottoms', 'dresses', 'outerwear'].includes(catId) && i.silhouette) {
         const p = newPiece.type === 'bottom' ? proportionScore(i, fake, 'classic') : newPiece.type === 'top' ? proportionScore(fake, i, 'classic') : 0.5;

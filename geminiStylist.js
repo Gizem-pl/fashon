@@ -7,7 +7,7 @@
    The API key is the user's own and lives only on this device; requests go straight from the browser to Google.
    No DOM and no storage here: data in, advice out. */
 
-import { WEAR_TAGS, CATEGORIES, FABRICS, THICKNESS, SILHOUETTES, SLEEVES, VIBES, SCENT_MOODS, scentsOf, perfumeMoodsOf } from './stylistEngine.js';
+import { WEAR_TAGS, CATEGORIES, FABRICS, THICKNESS, SILHOUETTES, SLEEVES, VIBES, SCENT_MOODS, COLOUR_RULES, scentsOf, perfumeMoodsOf } from './stylistEngine.js';
 
 const API = 'https://generativelanguage.googleapis.com/v1beta/models/';
 export const DEFAULT_MODEL = 'gemini-flash-latest';
@@ -146,7 +146,8 @@ const RULES = `Styling rules this app follows (keep to them):
 - Never layer two sleeved knits. Never put a thick piece under another top. A thinner piece cannot go over a thicker one (jackets and coats excepted).
 - A sleeveless knit or vest goes over a thin sleeved base such as a blouse or tee.
 - Keep volume to one half of the outfit; define the waist when it helps.
-- Balance light/medium pieces against dark ones.`;
+- Balance light/medium pieces against dark ones, softly: navy, charcoal or chocolate against cream reads richer than black against white.
+${COLOUR_RULES}`;
 
 const MINDFUL = `This person is a mindful buyer: they rarely shop and want to change their closet slowly so it becomes more their own style.
 Never suggest buying anything unless they explicitly ask about gaps, what is missing, or shopping.`;
@@ -590,7 +591,7 @@ export async function judgeLooks({ key, model = DEFAULT_MODEL, alternatives, clo
     votes.length ? '\n' + VOTES_HEAD + '\n' + voteLines(votes, byId) : '',
     seenNames.length ? `\nThe app has shown them these pieces a lot in the last few days: ${seenNames.join(', ')}. When two outfits are about equally good, choose the one that gives them something fresher.` : '',
     '',
-    'LIST A — "The Polished Classic" (balanced, defined, light-to-dark):', list(alternatives.classic),
+    'LIST A — "The Polished Classic" (balanced, defined, a soft light-to-dark contrast):', list(alternatives.classic),
     '',
     'LIST B — "The Effortless Editorial" (cooler, more undone):', list(alternatives.editorial),
     '',
