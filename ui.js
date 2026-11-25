@@ -297,20 +297,21 @@ function voteWhyHTML(look, rec, pieces) {
   return `<div class="vote-why" data-why="${look.id}">
     <p class="hint">${rec.vote > 0 ? 'What did you like?' : 'What felt off?'} <small>optional</small></p>
     <div class="chips">${tags.map(t => chip('vote-tag', t, t, on.has(t))).join('')}</div>
-    ${rec.vote < 0 ? `<p class="hint">Which piece? <small>optional</small></p>
+    ${rec.vote < 0 ? `<p class="hint">Which piece? <small>optional · pick two if it’s those two together</small></p>
     <div class="chips">${pieces.map(p => chip('vote-off', p.id, p.name, off.has(p.id))).join('')}</div>` : ''}
     <input type="text" class="vote-note" data-look-id="${look.id}" value="${esc(rec.note || '')}" placeholder="${rec.vote > 0 ? 'Anything else? (optional)' : 'In your words, e.g. too thin for this weather (optional)'}" aria-label="Note on this look">
   </div>`;
 }
 
-/** The free note: saved, and the reasons it means are switched on (as chips they can switch off again). The DOM is updated in place, so a chip tapped right after typing still lands. */
+/** The free note: saved, and the reasons it means are switched on (as chips they can switch off again — a chip switched off
+    stays off, even when the note is edited later). The DOM is updated in place, so a chip tapped right after typing still lands. */
 function saveVoteNote(input) {
   const look = state.studio.result?.looks?.find(l => l.id === input.dataset.lookId);
   const rec = look?.key && S.voteRecord(look.key);
   if (!rec) return;
   const note = input.value.trim();
   if (note === (rec.note || '')) return;
-  const found = E.noteTags(note).filter(t => !(rec.tags || []).includes(t));
+  const found = E.noteTags(note).filter(t => !(rec.tags || []).includes(t) && !(rec.muted || []).includes(t));
   S.setVoteReasons(look.key, { note, tags: [...(rec.tags || []), ...found] });
   const box = $(`[data-why="${look.id}"] .chips`);
   found.forEach(t => {
@@ -380,8 +381,9 @@ function generate(surprise = false, restyle = false) {
   const all = state.items;
   // a fresh start only when the inputs changed (that clears the result); Edit → Style me with the same choices keeps going
   if (surprise || (!restyle && !s.result)) s.shown = [];
+  const history = E.learnFromWears(S.getWears(), all, S.getVotes());
   if (surprise) {
-    const ids = E.pickSurpriseCore(all, S.getSeen());
+    const ids = E.pickSurpriseCore(all, S.getSeen(), history);
     if (!ids.length) { toast('Add some clothing to your closet first.'); return; }
     s.core = new Set(ids);
     renderPicker();
@@ -389,7 +391,6 @@ function generate(surprise = false, restyle = false) {
   if (!s.core.size) { toast('Pick a core piece, or tap Surprise Me.'); return; }
   const finish = {};
   FINISH_CATS.forEach(f => { finish[f.key] = s.finish[f.key] ? itemById(s.finish[f.key]) || null : null; });
-  const history = E.learnFromWears(S.getWears(), all, S.getVotes());
   const r = E.buildLooks({ items: all, coreIds: [...s.core], moodText: s.moodText, moodChips: moodPicks(), finish, history, occasion: s.occasion, shown: s.shown, seen: S.getSeen() });
   s.result = r;
   if (!r.error) { s.shown.push(...r.looks.map(l => l.key)); S.markSeen(r.looks); }
@@ -479,10 +480,20 @@ function wireStudio() {
         const field = b.dataset.act === 'vote-tag' ? 'tags' : 'off', val = b.dataset.val;
         const list = new Set(rec[field] || []), on = !list.has(val);
         if (on) list.add(val); else list.delete(val);
-        S.setVoteReasons(look.key, { [field]: [...list] });
+        const patch = { [field]: [...list] };
+        if (field === 'tags') {   // a reason the note switched on and they switched off stays off when the note is edited again
+          const muted = new Set(rec.muted || []);
+          if (on) muted.delete(val); else if (E.noteTags(rec.note).includes(val)) muted.add(val);
+          patch.muted = [...muted];
+        }
+        S.setVoteReasons(look.key, patch);
         b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
         if (on) {
-          const say = field === 'tags' ? E.reasonNote(val, rec.occasion) : `${itemById(val)?.name || 'that piece'} paired differently`;
+          // two or more pieces picked: "these don't go together" (the engine only counts the clothes, not jewelry or tights)
+          const names = (field === 'off' ? [...list] : rec.off || []).filter(id => (look.pieceIds || look.itemIds).includes(id)).map(id => itemById(id)?.name || 'that piece');
+          const say = field === 'tags'
+            ? (names.length >= 2 ? E.pickNote(names, [val], rec.occasion) : E.reasonNote(val, rec.occasion))
+            : names.length >= 2 ? E.pickNote(names, rec.tags || [], rec.occasion) : `${itemById(val)?.name || 'that piece'} paired differently`;
           if (say) toast(`Got it — ${say}`);
         }
         break;

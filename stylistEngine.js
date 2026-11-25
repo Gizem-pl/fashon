@@ -664,6 +664,11 @@ function pairScore(a, b, mood, intent) {
    - colours: which colours (and colour families) to keep apart or put together, and how many go in one look.
    - shape: which silhouette combinations work.
    - a piece singled out takes the blame together with the pieces it was paired with; the rest of the look is not blamed.
+   - two or more pieces singled out mean "these don't go together": only the pairings among them are blamed, not each piece on its
+     own and not the rest of the look. "Too boxy" teaches their shapes together, "Colours clash" or "Too many colours" keeps their
+     colours apart, "Too bulky" means one worn inside the other (or with the other) is too much — not that the clothes were too warm,
+     so knits stay in for winter. Reasons about each piece ("too thin", "too casual", "too dressy") stay about each piece.
+     The Studio then shows a repeat of a good look before it puts those two together again; liking them together later lifts it.
    A dislike that warmth or dressiness explains does not count against the combination: it may be right in another month or for another occasion.
    When two reasons contradict each other, the newer one wins. Everything fades slowly (half after a year), so taste can change.
    The person's own verdict always weighs more than the AI's. */
@@ -704,6 +709,18 @@ export function reasonNote(tag, occasion = '') {
     'Too boxy': 'less volume with these shapes', 'Too tight': 'an easier fit with these shapes', 'Great proportions': 'more of these proportions',
     'Not my style': 'fewer looks like this', 'Very me': 'more looks like this'
   }[tag] || '';
+}
+
+/** With two or more pieces picked, does this reason blame them together? Not "too thin", "too casual", "too dressy": those are about each piece. */
+export const isTogetherTag = t => { const r = REASONS[t]; return !!r && r.dir < 0 && (r.bulk || !['warmth', 'dress'].includes(r.kind)); };
+/** What singling out pieces will teach, in a few words. names: the picked pieces; tags: the reasons given. */
+export function pickNote(names = [], tags = [], occasion = '') {
+  if (!names.length) return '';
+  if (names.length === 1) return `${names[0]} paired differently`;
+  const list = `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  if (!tags.length || tags.some(isTogetherTag)) return `${list} kept apart`;
+  const says = tags.map(t => reasonNote(t, occasion)).filter(Boolean);
+  return says.length ? `${list}: ${says.join(', ')}` : '';
 }
 
 /** Words in a free note that mean one of the reasons ("two thin things", "the colours don't go together"), unless negated ("not too thin"). */
@@ -790,6 +807,7 @@ const clampAbs = (v, m) => Math.max(-m, Math.min(m, v));
 const slotOf = i => categoryById(i?.category)?.slot;
 const addTo = (map, k, v) => map.set(k, (map.get(k) || 0) + v);
 const RECENT_MS = 5 * 864e5;
+const APART_MISS = 6;      // per time they said two pieces don't go together: more than the "shown / seen lately" push-back, so a repeat comes first
 const fade = at => 0.5 ** (Math.max(0, Date.now() - (at || 0)) / 3.156e10);   // half after a year
 
 /** The combination: every pair, or with pieces singled out only the pairs they are in. */
@@ -804,17 +822,31 @@ function addCombo(m, pieces, w, blamed = new Set()) {
   }
   blamed.forEach(id => addTo(m.item, id, w * 0.4));
 }
+/** "These don't go together" (two or more pieces singled out): only the pairs among them, each piece fine on its own.
+    w is 1 for a vote today (it fades), split between the pairs when three or more are picked. Kept with the date it was said,
+    so liking them together later lifts it (see learnFromWears). */
+function keepApart(ev, pieces, blamed, at, w) {
+  const picked = pieces.filter(p => blamed.has(p.id)), k = picked.length;
+  for (let i = 0; i < k; i++) for (let j = i + 1; j < k; j++) ev.apart.push({ k: pairKey(picked[i].id, picked[j].id), at: at || 0, w: w / (k - 1) });
+}
+const likedTogether = (ev, pieces, at) => {
+  for (let i = 0; i < pieces.length; i++) for (let j = i + 1; j < pieces.length; j++) {
+    const k = pairKey(pieces[i].id, pieces[j].id);
+    ev.liked.set(k, Math.max(ev.liked.get(k) || 0, at || 0));
+  }
+};
 function learnShape(m, pieces, w) {
   const tops = pieces.filter(p => slotOf(p) === 'top'), top = tops[tops.length - 1], bottom = pieces.find(p => slotOf(p) === 'bottom');
   if (top?.silhouette && bottom?.silhouette) addTo(m.shape, `${top.silhouette}|${bottom.silhouette}`, w);
 }
-/** Colour pairs (by name, and more gently by family). With accents in the look, two neutrals are rarely the clash. */
-function learnColours(m, pieces, w, blamed = new Set()) {
+/** Colour pairs (by name, and more gently by family). With accents in the look, two neutrals are rarely the clash.
+    With one piece singled out: its colour against the others. With several (together): only their colours against each other. */
+function learnColours(m, pieces, w, blamed = new Set(), together = false) {
   const cp = pieces.filter(p => CLOTHING_SLOTS.has(slotOf(p)) && (p.color?.name || p.color?.hex));
   const accents = cp.some(p => !isNeutralPiece(p));
   for (let i = 0; i < cp.length; i++) for (let j = i + 1; j < cp.length; j++) {
     const a = cp[i], b = cp[j];
-    if (blamed.size && !blamed.has(a.id) && !blamed.has(b.id)) continue;
+    if (together ? !(blamed.has(a.id) && blamed.has(b.id)) : blamed.size && !blamed.has(a.id) && !blamed.has(b.id)) continue;
     const f = !blamed.size && accents && isNeutralPiece(a) && isNeutralPiece(b) ? 0.4 : 1;
     const na = lc(a.color?.name), nb = lc(b.color?.name), fa = familyOf(a), fb = familyOf(b);
     if (na && nb && na !== nb) addTo(m.colour, pairKey(na, nb), w * f);
@@ -823,16 +855,23 @@ function learnColours(m, pieces, w, blamed = new Set()) {
 }
 
 /**
- * Learn from one reason. ctx: { pieces, at, occ (null = unknown), tights, blamed: Set of piece ids }.
+ * Learn from one reason. ctx: { pieces, at, occ (null = unknown), tights, blamed: Set of piece ids, together: two or more singled out }.
  * Returns true when the reason explains a dislike without blaming the combination (warmth, dressiness).
- * May add to ctx.blamed when the reason points at one piece (a bulky coat).
  */
 function absorbReason(m, ev, tag, ctx, s) {
   const r = REASONS[tag], w = s * fade(ctx.at);
   if (!r || !w) return false;
-  const { pieces, at, occ, blamed } = ctx;
+  const { pieces, at, occ, blamed, together } = ctx;
+  const picked = together ? pieces.filter(p => blamed.has(p.id)) : null;
+  // a top and a bottom among the picked pieces, both with some volume to blame (two fitted pieces are not "bulky" by shape)
+  const roomy = pp => pp.some(p => slotOf(p) === 'top' && p.silhouette && p.silhouette !== 'Fitted')
+    || pp.some(p => slotOf(p) === 'bottom' && p.silhouette && p.silhouette !== 'Fitted');
   switch (r.kind) {
     case 'warmth': {
+      if (together && r.bulk) {                                           // "the blouse inside the wool sweater is too bulky": that pairing, not the warmth
+        if (roomy(picked)) learnShape(m, picked, -0.5 * w);
+        return false;
+      }
       if (blamed.size) {                                                  // "the trench is too thin", "those flats are too cold": that part only
         const which = [...new Set([...blamed].flatMap(id => partsOf(pieces.find(p => p.id === id))))];
         if (!which.length) return false;
@@ -866,12 +905,12 @@ function absorbReason(m, ev, tag, ctx, s) {
       else if (r.dir || occ) { const d = dressLevel(pieces); ev.dress.push({ at, key: occ, kind: r.dir > 0 ? 'floor' : r.dir < 0 ? 'ceil' : 'ok', v: d + 0.25 * r.dir, d, w }); }
       return true;
     }
-    case 'colour': learnColours(m, pieces, r.dir * (r.dir > 0 ? 0.5 : 0.6) * w, blamed); return r.dir > 0;
-    case 'count':
-      m.colourCap.push({ cap: Math.max(2, colourCount(pieces) - 1), w });
-      if (blamed.size) learnColours(m, pieces, -0.4 * w, blamed);
+    case 'colour': learnColours(m, pieces, r.dir * (r.dir > 0 ? 0.5 : 0.6) * w, blamed, together); return r.dir > 0;
+    case 'count':   // with two picked: mostly "these two colours don't go together", a little "fewer colours"
+      m.colourCap.push({ cap: Math.max(2, colourCount(pieces) - 1), w: together ? 0.5 * w : w });
+      if (blamed.size) learnColours(m, pieces, (together ? -0.5 : -0.4) * w, blamed, together);
       return false;
-    case 'shape': learnShape(m, pieces, (r.dir > 0 ? 0.5 : -0.6) * w); return r.dir > 0;
+    case 'shape': learnShape(m, together ? picked : pieces, (r.dir > 0 ? 0.5 : -0.6) * w); return r.dir > 0;
     default: return r.dir > 0;
   }
 }
@@ -910,8 +949,8 @@ const hasTights = (ids, byId) => (ids || []).some(id => isTights(byId.get(id)));
 export function learnFromWears(wears = [], items = [], votes = []) {
   const byId = new Map(items.map(i => [i.id, i]));
   const m = { pair: new Map(), item: new Map(), shape: new Map(), colour: new Map(), colourFam: new Map(), colourCap: [],
-    warmth: [], dress: new Map(), slotDress: new Map(), recent: new Set(), lastWorn: new Map(), wears: [] };
-  const ev = { warmth: [], dress: [], slot: [] };
+    warmth: [], dress: new Map(), slotDress: new Map(), recent: new Set(), lastWorn: new Map(), wears: [], apart: new Map() };
+  const ev = { warmth: [], dress: [], slot: [], apart: [], liked: new Map() };
   const now = Date.now();
   for (const w of wears) {
     const pieces = (w.pieceIds || []).map(id => byId.get(id)).filter(Boolean);
@@ -937,24 +976,34 @@ export function learnFromWears(wears = [], items = [], votes = []) {
     const ctx = { pieces, at: w.wornAt, occ: 'occasion' in w ? (w.occasion || '') : null, tights: hasTights(w.itemIds, byId), blamed: new Set() };
     userTags.forEach(t => absorbReason(m, ev, t, ctx, 1));
     aiTags.forEach(t => absorbReason(m, ev, t, ctx, 0.5));
+    if (overall >= 1) likedTogether(ev, pieces, w.wornAt);
     m.wears.push({ w, pieces, overall });
   }
   for (const v of votes) {
     const pieces = (v.pieceIds || []).map(id => byId.get(id)).filter(Boolean);
     if (pieces.length < 2 || !v.vote) continue;
     const ids = new Set(pieces.map(p => p.id)), w = fade(v.at);
-    const ctx = { pieces, at: v.at, occ: v.occasion ?? null, tights: hasTights(v.itemIds, byId), blamed: new Set((v.off || []).filter(id => ids.has(id))) };
+    const blamed = new Set((v.off || []).filter(id => ids.has(id)));
+    const ctx = { pieces, at: v.at, occ: v.occasion ?? null, tights: hasTights(v.itemIds, byId), blamed, together: blamed.size >= 2 };
     const tags = [...new Set(v.tags || [])].filter(t => REASONS[t]);
     const explained = tags.map(t => absorbReason(m, ev, t, ctx, 1));
     if (v.vote > 0) {
       addCombo(m, pieces, 0.9 * w * (tags.includes('Very me') ? 1.5 : 1));
+      likedTogether(ev, pieces, v.at);
       if (ctx.occ && !tags.includes('Right for the occasion')) ev.dress.push({ at: v.at, key: ctx.occ, kind: 'ok', d: dressLevel(pieces), w: 0.4 * w });
       continue;
     }
     // a dislike counts against the combination unless every reason given explains it another way
     const negative = tags.map(t => COMPLAINTS.has(t));
-    if (!negative.some(Boolean) || negative.some((n, i) => n && !explained[i])) addCombo(m, pieces, -1.4 * w, ctx.blamed);
-    if (tags.includes('Not my style')) ctx.blamed.forEach(id => addTo(m.item, id, -0.6 * w));
+    if (!negative.some(Boolean) || negative.some((n, i) => n && !explained[i])) {
+      if (ctx.together) keepApart(ev, pieces, blamed, v.at, w); else addCombo(m, pieces, -1.4 * w, blamed);
+    }
+    if (tags.includes('Not my style') && !ctx.together) blamed.forEach(id => addTo(m.item, id, -0.6 * w));   // with two picked: the two together are not them
+  }
+  // kept apart, unless they liked the two together since (the newer verdict wins); m.apart is how firmly, about 1 per time they said it
+  for (const e of ev.apart) {
+    if ((ev.liked.get(e.k) || 0) > e.at) continue;
+    addTo(m.apart, e.k, e.w);
   }
   m.warmth = resolveWarmth(ev.warmth);
   m.dress = resolveBands(ev.dress);
@@ -1017,6 +1066,7 @@ function learnedPair(a, b, colour = true) {
   const k = pairKey(a.id, b.id);
   let s = clampAbs(LEARN.pair.get(k) || 0, 4);
   if (LEARN.recent.has(k)) s -= 1.2;                                       // worn together a few days ago: vary it
+  s -= APART_MISS * Math.min(2, LEARN.apart?.get(k) || 0);                 // they said these two don't go together: while picking too, so other options get tried
   const top = slotOf(a) === 'top' ? a : slotOf(b) === 'top' ? b : null;
   const bottom = slotOf(a) === 'bottom' ? a : slotOf(b) === 'bottom' ? b : null;
   if (top && bottom) s += clampAbs(LEARN.shape.get(`${top.silhouette}|${bottom.silhouette}`) || 0, 3);
@@ -1032,6 +1082,8 @@ function learnedColour(a, b) {
   if (fa && fb) s += clampAbs(LEARN.colourFam.get(pairKey(fa, fb)) || 0, 1.5);
   return s;
 }
+/** They said this piece doesn't go with one of these (see keepApart). */
+const keptApart = (c, list) => !!LEARN?.apart?.size && list.some(x => x && (LEARN.apart.get(pairKey(c.id, x.id)) || 0) >= 0.5);
 function learnedItem(c) { return LEARN && c ? clampAbs(LEARN.item.get(c.id) || 0, 2) + slotDressFit(c) : 0; }
 
 /** "Those sneakers are too casual for work": shoes for work have to be dressier than that, other occasions are untouched. */
@@ -1132,7 +1184,8 @@ function pickBest(cands, scoreFn, avoid, jitter = 0.5) {
 }
 
 /** Pick a random but sensible core: a dress, or top + bottom — leaning towards pieces not seen lately. seen: the seen-lately log. */
-export function pickSurpriseCore(items, seen = null) {
+export function pickSurpriseCore(items, seen = null, history = undefined) {
+  if (history !== undefined) LEARN = history;   // what they taught (pairs they keep apart, too), not whatever the last look was built with
   const map = seen ? seenWeights(seen) : SEEN, stale = c => seenPenalty(c, map);
   const by = c => items.filter(i => i.category === c);
   const dresses = by('dresses'), tops = by('tops'), bottoms = by('bottoms');
@@ -1154,11 +1207,12 @@ export function pickSurpriseCore(items, seen = null) {
   let best = null, bs = -Infinity;
   for (let n = 0; n < 12; n++) {
     const t = rnd(tops), b = rnd(bottoms);
+    if (keptApart(t, [b])) continue;                          // never start from two pieces they said don't go together
     const s = proportionScore(t, b, 'classic') + pairScore(t, b, mood, 'classic') + partFit('legs', [b]) + 0.5 * partFit('torso', [t]) + Math.random()
       - stale(t) - stale(b);
     if (s > bs) { bs = s; best = [t.id, b.id]; }
   }
-  return best;
+  return best || [rnd(tops).id];
 }
 
 /** Cold months (October–April) favour knitwear and an extra layer. Set per buildLooks call. */
@@ -1247,8 +1301,9 @@ function completeOutfit(core, items, mood, intent, avoid) {
     while (o.top.length < maxTops) {
       const visible = o.top[o.top.length - 1];
       const layer = pickBest(
-        notCore(pool('top')).filter(t => !o.top.some(x => x.id === t.id) && orderStack([...o.top, t]).ok),
-        t => pairScore(t, visible, mood, intent) + o.top.reduce((n, x) => n + layerPair(x, t).penalty, 0)
+        // never a layer they said doesn't go with the other tops or the bottom; with nothing else left, no layer (the coat keeps them warm)
+        notCore(pool('top')).filter(t => !o.top.some(x => x.id === t.id) && orderStack([...o.top, t]).ok && !keptApart(t, [...o.top, o.bottom])),
+        t => pairScore(t, visible, mood, intent) + o.top.reduce((n, x) => n + layerPair(x, t).penalty + (x !== visible ? learnedPair(x, t, false) : 0), 0)
           + (COLD && fabricInfo(t.fabric)?.warmth === 'warm' ? 0.6 : 0)
           + (intent === 'editorial' && (t.silhouette === 'Relaxed' || t.silhouette === 'Voluminous') ? 0.8 : 0)
           + torsoFit([...o.top, t]),
@@ -1262,7 +1317,9 @@ function completeOutfit(core, items, mood, intent, avoid) {
   if (!o.outer && pool('outer').length && base) {
     const under = o.dress ? [o.dress] : o.top;
     const neckline = under[under.length - 1];   // what shows at the collar and front of an open coat
+    // what they taught about this coat over these very pieces ("that blouse under this coat is too bulky") counts too, not only the bottom
     o.outer = pickBest(pool('outer'), c => pairScore(c, anchor, mood, intent) + (neckline && neckline !== anchor ? colourMatch(c, neckline, mood).s * 0.8 : 0)
+      + under.reduce((t, u) => t + (u !== anchor ? learnedPair(c, u, u === neckline) : 0), 0)
       + outerLayerPenalty(under, c) + (intent === 'classic' && c.silhouette === 'Relaxed' ? 0.5 : 0) + partFit('outer', [c]), avoid, 0.7);
     if (o.outer && outerLayerPenalty(under, o.outer) <= -8) o.outer = null;   // would not sit over what is underneath: skip it
   }
@@ -1705,6 +1762,8 @@ function outfitScore(o, mood, intent, target) {
   if (cw) s += 1.2 * cp.reduce((t, [c, w]) => t + c * w, 0) / cw + COLOUR_MISS * Math.min(0, 0.3 + Math.min(...cp.map(([c, w]) => c * w)));
   // pairs: sheen and what the diary / votes taught about the pieces themselves
   if (pairs.length) s += pairs.reduce((t, [a, b]) => t + sheenScore(a, b) + learnedPair(a, b, false) * 0.6, 0) / Math.sqrt(pairs.length);
+  // two pieces they said don't go together count in full, however many pieces the look has: a repeat of a good look comes first
+  if (LEARN?.apart?.size) s -= APART_MISS * Math.min(2, pairs.reduce((t, [a, b]) => t + (LEARN.apart.get(pairKey(a.id, b.id)) || 0), 0));
   // proportion and contrast of the main pairing
   const top = o.top[o.top.length - 1];
   if (top && o.bottom) s += proportionScore(top, o.bottom, intent) * 1.1 + contrastScore(top, o.bottom, intent) * 0.6;

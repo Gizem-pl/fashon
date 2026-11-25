@@ -7,7 +7,7 @@
    The API key is the user's own and lives only on this device; requests go straight from the browser to Google.
    No DOM and no storage here: data in, advice out. */
 
-import { WEAR_TAGS, CATEGORIES, FABRICS, THICKNESS, SILHOUETTES, SLEEVES, VIBES, SCENT_MOODS, COLOUR_RULES, scentsOf, perfumeMoodsOf } from './stylistEngine.js';
+import { WEAR_TAGS, isTogetherTag, CATEGORIES, FABRICS, THICKNESS, SILHOUETTES, SLEEVES, VIBES, SCENT_MOODS, COLOUR_RULES, scentsOf, perfumeMoodsOf } from './stylistEngine.js';
 
 const API = 'https://generativelanguage.googleapis.com/v1beta/models/';
 export const DEFAULT_MODEL = 'gemini-flash-latest';
@@ -164,7 +164,12 @@ function voteLines(votes = [], byId) {
   return votes.slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 15).map(v => {
     const names = (v.pieceIds || []).map(id => byId.get(id)?.name).filter(Boolean).join(', ');
     const off = (v.off || []).map(id => byId.get(id)?.name).filter(Boolean);
-    return `- ${new Date(v.at).toLocaleDateString('en-GB')}: ${v.vote > 0 ? 'would wear' : 'not for them'}: ${names}${v.tags?.length ? ` — why: ${v.tags.join(', ').toLowerCase()}` : ''}${off.length ? ` — the problem: ${off.join(', ')}` : ''}${v.note ? ` — note: ${v.note}` : ''}`;
+    // two or more picked: the problem is those pieces together (worn together, or one inside the other), not each one on its own
+    const together = off.length >= 2 && (!v.tags?.length || v.tags.some(isTogetherTag));
+    const problem = together ? ` — the problem: ${off.join(' with ')} together (each is fine on its own)` : off.length ? ` — the problem: ${off.join(', ')}` : '';
+    // a reason the note seems to say but they switched off: the note does not mean that
+    const muted = v.note && v.muted?.length ? ` (they said this is not about: ${v.muted.join(', ').toLowerCase()})` : '';
+    return `- ${new Date(v.at).toLocaleDateString('en-GB')}: ${v.vote > 0 ? 'would wear' : 'not for them'}: ${names}${v.tags?.length ? ` — why: ${v.tags.join(', ').toLowerCase()}` : ''}${problem}${v.note ? ` — note: ${v.note}${muted}` : ''}`;
   }).join('\n');
 }
 const VOTES_HEAD = 'THEIR QUICK FEEDBACK ON OUTFITS THE APP SUGGESTED (respect it: never send them out in something they turned down for the same reason — e.g. something just as thin in similar weather)';
