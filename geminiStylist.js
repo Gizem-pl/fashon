@@ -158,6 +158,16 @@ function todayLine() {
   return `Today is ${d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}${tz ? ` (time zone ${tz}, so think about the season and climate there)` : ''}.`;
 }
 
+/** Quick 👍 / 👎 on looks the Studio suggested, with the reasons they gave. */
+function voteLines(votes = [], byId) {
+  return votes.slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 15).map(v => {
+    const names = (v.pieceIds || []).map(id => byId.get(id)?.name).filter(Boolean).join(', ');
+    const off = (v.off || []).map(id => byId.get(id)?.name).filter(Boolean);
+    return `- ${new Date(v.at).toLocaleDateString('en-GB')}: ${v.vote > 0 ? 'would wear' : 'not for them'}: ${names}${v.tags?.length ? ` — why: ${v.tags.join(', ').toLowerCase()}` : ''}${off.length ? ` — the problem: ${off.join(', ')}` : ''}${v.note ? ` — note: ${v.note}` : ''}`;
+  }).join('\n');
+}
+const VOTES_HEAD = 'THEIR QUICK FEEDBACK ON OUTFITS THE APP SUGGESTED (respect it: never send them out in something they turned down for the same reason — e.g. something just as thin in similar weather)';
+
 function diaryLines(wears = [], byId) {
   return wears.slice(0, 12).map(w => {
     const names = (w.itemIds || w.pieceIds || []).map(id => byId.get(id)?.name).filter(Boolean).join(', ');
@@ -266,7 +276,7 @@ const CHAT_SCHEMA = {
  * photo: Blob attached to the newest user message (older photos are not re-sent).
  * Returns { reply, outfits: [{title, itemIds, note}], packing: {title, itemIds, tips}|null, gaps: [{piece, why, unlocks}] }.
  */
-export async function chat({ key, model = DEFAULT_MODEL, messages, photo = null, closet = [], profile, wears = [], looks = [], signal }) {
+export async function chat({ key, model = DEFAULT_MODEL, messages, photo = null, closet = [], profile, wears = [], looks = [], votes = [], signal }) {
   if (!key) throw new Error('Add your Gemini key in Profile first.');
   const byId = new Map(closet.map(i => [i.id, i]));
   const names = ids => (ids || []).map(id => byId.get(id)?.name).filter(Boolean).join(', ');
@@ -281,6 +291,7 @@ export async function chat({ key, model = DEFAULT_MODEL, messages, photo = null,
     closetLines(closet) || '(the closet is empty — encourage them to add pieces in the Closet tab)',
     '',
     wears.length ? 'RECENT OUTFIT DIARY (what they wore and how it went — learn from it)\n' + diaryLines(wears, byId) + '\n' : '',
+    votes.length ? VOTES_HEAD + '\n' + voteLines(votes, byId) + '\n' : '',
     looks.length ? `Looks they saved: ${looks.slice(0, 15).map(l => l.title).join('; ')}.\n` : '',
     RULES,
     '',
@@ -564,7 +575,7 @@ const PICK = { type: 'OBJECT', properties: { id: { type: 'STRING' }, why: { type
 const JUDGE_SCHEMA = { type: 'OBJECT', properties: { classic: PICK, editorial: PICK }, required: ['classic', 'editorial'] };
 
 /** alternatives: { classic: [look], editorial: [look] } with look.pieceIds. Returns { classic: { id, why }, editorial: { id, why } }. */
-export async function judgeLooks({ key, model = DEFAULT_MODEL, alternatives, closet = [], profile, mood, feeling, occasion, season, signal }) {
+export async function judgeLooks({ key, model = DEFAULT_MODEL, alternatives, closet = [], profile, mood, feeling, occasion, season, votes = [], signal }) {
   if (!key) throw new Error('Add your Gemini key in Profile first.');
   const byId = new Map(closet.map(i => [i.id, i]));
   const list = looks => looks.map(l => `${l.id}:\n${closetLines(l.pieceIds.map(id => byId.get(id)).filter(Boolean)).replace(/^/gm, '  ')}`).join('\n');
@@ -575,6 +586,7 @@ export async function judgeLooks({ key, model = DEFAULT_MODEL, alternatives, clo
     todayLine(),
     `Mood: ${mood} (${feeling}). ${occasion ? `Occasion: ${occasion}.` : 'No occasion given.'} Season: ${season}.`,
     'ABOUT THE PERSON', profileLines(profile),
+    votes.length ? '\n' + VOTES_HEAD + '\n' + voteLines(votes, byId) : '',
     '',
     'LIST A — "The Polished Classic" (balanced, defined, light-to-dark):', list(alternatives.classic),
     '',

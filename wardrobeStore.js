@@ -93,15 +93,27 @@ export async function deleteWear(id) {
   try { await deletePhoto(id); } catch (e) { console.warn(e); }
 }
 
-/* ---------- Quick 👍 / 👎 on suggested looks: { id (outfit key), pieceIds, vote: 1 | -1, at } — teaches the Studio your taste ---------- */
+/* ---------- Quick 👍 / 👎 on suggested looks — teaches the Studio your taste:
+   { id (outfit key), pieceIds, itemIds (with accessories, e.g. tights), vote: 1 | -1, at, occasion, tags: [], off: [piece ids], note }
+   The why (tags, off, note) is all optional. ---------- */
 
 export function getVotes() { return read(LS.votes, []); }
-export function voteOf(key) { return getVotes().find(v => v.id === key)?.vote || 0; }
-/** vote 0 removes it. */
-export function setVote(key, pieceIds, vote) {
+export function voteRecord(key) { return getVotes().find(v => v.id === key) || null; }
+export function voteOf(key) { return voteRecord(key)?.vote || 0; }
+/** vote 0 removes it. Flipping the vote clears the reasons given for the old one. ctx: { occasion, itemIds }. */
+export function setVote(key, pieceIds, vote, ctx = {}) {
+  const old = voteRecord(key);
   const list = getVotes().filter(v => v.id !== key);
-  if (vote) list.push({ id: key, pieceIds, vote, at: Date.now() });
+  if (vote) list.push(old && old.vote === vote ? { ...old, at: Date.now() }
+    : { id: key, pieceIds, itemIds: ctx.itemIds || pieceIds, vote, at: Date.now(), occasion: ctx.occasion || '', tags: [], off: [], note: '' });
   return write(LS.votes, list.slice(-300));
+}
+/** Optional reasons on an existing vote: patch of { tags, off, note }. */
+export function setVoteReasons(key, patch) {
+  const list = getVotes(), v = list.find(x => x.id === key);
+  if (!v) return false;
+  Object.assign(v, patch);
+  return write(LS.votes, list);
 }
 
 /* ---------- AI stylist settings: { key, model }. Stays on this device and is never put in a backup. ---------- */

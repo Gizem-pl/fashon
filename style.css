@@ -473,3 +473,9 @@ body.typing .composer { bottom: calc(10px + env(safe-area-inset-bottom)); }
 .vote { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 14px 0 10px; font-size: 13px; }
 .vote span { opacity: .75; margin-right: auto; }
 .chip-group small { text-transform: none; letter-spacing: 0; }
+.vote-why { margin: -4px 0 12px; padding: 4px 12px 12px; border-left: 2px solid var(--line); }
+.vote-why .hint { margin: 10px 0 0; }
+.vote-why .hint small { opacity: .7; }
+.vote-why .chips { margin-top: 6px; }
+.vote-why .chip { padding: 6px 12px; font-size: 13px; }
+.vote-why .vote-note { width: 100%; margin-top: 10px; }

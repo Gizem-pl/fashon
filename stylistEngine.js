@@ -524,10 +524,18 @@ function pairScore(a, b, mood, intent) {
   return contrastScore(a, b, intent) + harmony(a.color?.hex, b.color?.hex) + vibeScore(b, mood) + sheenScore(a, b) + learnedPair(a, b);
 }
 
-/* ---------- Learning from the outfit diary ----------
-   Each logged wear (how it felt, what was noticed, optional AI review) nudges future scoring:
-   the exact pieces worn together, the silhouette combination, the colour pairing and each piece on its own.
-   The user's own verdict always weighs more than the AI's. */
+/* ---------- Learning: the outfit diary and the quick 👍 / 👎 on suggested looks ----------
+   A reason teaches the thing it is about, and only that:
+   - warmth ("too thin", "too cold", "too bulky", "too warm") sets a lower or upper limit on how warm the clothes are, for that time of year.
+     A "too thin" from November still holds in colder weather and fades as it gets milder; a "too bulky" works the other way round.
+   - dressiness ("too casual", "too dressy", "right for the occasion") sets the level for that occasion. With a piece picked, only
+     that kind of piece has to change: "these sneakers are too casual for work" asks for dressier shoes for work, nothing else.
+   - colours: which colours (and colour families) to keep apart or put together, and how many go in one look.
+   - shape: which silhouette combinations work.
+   - a piece singled out takes the blame together with the pieces it was paired with; the rest of the look is not blamed.
+   A dislike that warmth or dressiness explains does not count against the combination: it may be right in another month or for another occasion.
+   When two reasons contradict each other, the newer one wins. Everything fades slowly (half after a year), so taste can change.
+   The person's own verdict always weighs more than the AI's. */
 
 export const WEAR_FEELS = [
   { id: 'love', label: 'Loved it',    w: 1.6 },
@@ -538,20 +546,241 @@ export const WEAR_TAGS = {
   good: ['Great proportions', 'Flattering fit', 'Colours work', 'Felt confident', 'Comfortable', 'Right for the occasion'],
   bad:  ['Too boxy', 'Too much volume', 'Too tight', 'Colours clash', 'Too many colours', 'Too warm', 'Too cold', 'Too casual', 'Too dressy', 'Uncomfortable']
 };
-const GOOD_TAGS = new Set(WEAR_TAGS.good), BAD_TAGS = new Set(WEAR_TAGS.bad);
-const SHAPE_TAGS = new Set(['Great proportions', 'Flattering fit', 'Too boxy', 'Too much volume', 'Too tight']);
-const COLOUR_TAGS = new Set(['Colours work', 'Colours clash', 'Too many colours']);
+/** Optional reasons on a quick 👍 / 👎 in the Studio. Same words as the diary where they mean the same thing. */
+export const VOTE_TAGS = {
+  good: ['Colours work', 'Great proportions', 'Right for the occasion', 'Very me'],
+  bad:  ['Too thin', 'Too bulky', 'Colours clash', 'Too many colours', 'Too boxy', 'Too tight', 'Too casual', 'Too dressy', 'Not my style']
+};
+/** What each reason is about. dir: +1 wants more of it (warmer, dressier) or likes it, −1 wants less of it or dislikes it. */
+const REASONS = {
+  'Too thin':   { kind: 'warmth', dir: 1 },  'Too cold':  { kind: 'warmth', dir: 1 },
+  'Too bulky':  { kind: 'warmth', dir: -1, bulk: true }, 'Too warm': { kind: 'warmth', dir: -1 },
+  'Too casual': { kind: 'dress', dir: 1 },   'Too dressy': { kind: 'dress', dir: -1 }, 'Right for the occasion': { kind: 'dress', dir: 0 },
+  'Colours clash': { kind: 'colour', dir: -1 }, 'Colours work': { kind: 'colour', dir: 1 }, 'Too many colours': { kind: 'count', dir: -1 },
+  'Too boxy': { kind: 'shape', dir: -1 }, 'Too much volume': { kind: 'shape', dir: -1 }, 'Too tight': { kind: 'shape', dir: -1 },
+  'Great proportions': { kind: 'shape', dir: 1 }, 'Flattering fit': { kind: 'shape', dir: 1 },
+  'Not my style': { kind: 'style', dir: -1 }, 'Very me': { kind: 'style', dir: 1 }
+};
+
+/** What a reason will change, in a few words, to confirm it was understood. */
+export function reasonNote(tag, occasion = '') {
+  const occ = OCCASIONS.find(o => o.id === occasion)?.label;
+  const forOcc = occ ? ` for ${occ.toLowerCase()}` : '';
+  return {
+    'Too thin': 'warmer looks at this time of year', 'Too bulky': 'lighter, less bulky looks',
+    'Too casual': `dressier looks${forOcc}`, 'Too dressy': `more relaxed looks${forOcc}`, 'Right for the occasion': `this level of dressiness${forOcc}`,
+    'Colours clash': 'these colours kept apart', 'Colours work': 'these colours together more often', 'Too many colours': 'fewer colours in one look',
+    'Too boxy': 'less volume with these shapes', 'Too tight': 'an easier fit with these shapes', 'Great proportions': 'more of these proportions',
+    'Not my style': 'fewer looks like this', 'Very me': 'more looks like this'
+  }[tag] || '';
+}
+
+/** Words in a free note that mean one of the reasons ("two thin things", "the colours don't go together"), unless negated ("not too thin"). */
+const NOTE_HINTS = [
+  ['Too thin',         /\b(?:thin|flimsy|sheer|see[- ]?through|chilly|cold|freezing|summery)\b|not warm enough|too light\b(?!\s*(?:in\s+)?(?:colou?r|tone|shade))/],
+  ['Too bulky',        /\b(?:bulky|puffy|stuffy|sweaty|overheat\w*)\b|too (?:thick|heavy|chunky|warm|hot)\b|too many layers/],
+  ['Too many colours', /too many colou?rs|too (?:colou?rful|busy|loud)\b/],
+  ['Colours clash',    /\bclash\w*|\b(?:wrong|bad|ugly|weird|odd|awful|strange) colou?rs?\b|colou?rs? (?:are |is |look |looks )?(?:off|wrong|weird|odd|bad|awful|ugly)\b|(?:don'?t|doesn'?t|do not|does not|didn'?t) (?:go|match|work) together|(?:don'?t|doesn'?t|do not|does not) match\b/],
+  ['Too boxy',         /\b(?:boxy|baggy|shapeless|frumpy|sacky|swamp\w*)\b|too (?:loose|big|wide|oversized|much volume)\b|no waist\b/],
+  ['Too tight',        /\b(?:tight|clingy|restrictive)\b|too (?:fitted|small)\b/],
+  ['Too casual',       /\btoo (?:casual|relaxed|sporty|plain|basic|simple)\b|\b(?:sloppy|underdressed|under-dressed)\b|not (?:dressy|smart|formal|polished|elegant) enough/],
+  ['Too dressy',       /\btoo (?:dressy|formal|fancy|smart|elegant|much for)\b|\bover-?dressed\b|not (?:casual|relaxed) enough/],
+  ['Not my style',     /\bnot (?:my style|really me|me)\b|\bisn'?t (?:really )?me\b|doesn'?t feel like me/],
+  ['Colours work',     /\b(?:love|like|great|nice|beautiful|good|lovely|gorgeous|perfect) colou?rs?\b|\b(?:love|like) the colou?rs?\b|colou?rs? (?:work|go together|are (?:great|nice|perfect|lovely))/],
+  ['Great proportions', /\bproportions? (?:are |is )?(?:great|good|nice|perfect|right)\b|\bflattering\b|great (?:shape|proportions?)/],
+  ['Right for the occasion', /\b(?:perfect|right|great|ideal|good) for (?:work|the office|dinner|a date|the event|today|errands)\b/],
+  ['Very me',          /\b(?:so|very|totally|really|exactly) me\b|\bmy style\b/]
+];
+const NEGATED = /\b(?:not|never|no|isn'?t|wasn'?t|aren'?t|weren'?t|don'?t|doesn'?t|didn'?t|wouldn'?t|without)\s+(?:\w+\s+)?$/i;
+export function noteTags(text = '') {
+  const t = String(text || ''), out = [];
+  for (const [tag, re] of NOTE_HINTS)
+    for (const m of t.matchAll(new RegExp(re.source, 'gi')))
+      if (!NEGATED.test(t.slice(Math.max(0, m.index - 24), m.index))) { out.push(tag); break; }
+  return out;
+}
+
+/* Warmth, part by part. About 1 = summer-light, 2 = a knit or jeans, 3+ = winter-warm.
+   The coat is its own part: it comes off indoors, so "too thin" about the outfit is about what is under it,
+   and "this trench is too thin" is about the coat alone. */
+const COLD_MONTHS = [9, 10, 11, 0, 1, 2, 3];
+const COLDNESS = [1, 0.95, 0.75, 0.5, 0.25, 0.08, 0, 0.05, 0.25, 0.5, 0.8, 0.95];   // Jan … Dec
+/** 0 = high summer … 1 = deep winter, from the date (northern hemisphere, as the season rules assume). */
+export function coldnessAt(ts = Date.now()) {
+  const d = new Date(ts), m = d.getMonth(), f = (d.getDate() - 15) / 30;
+  const n = f >= 0 ? (m + 1) % 12 : (m + 11) % 12;
+  return COLDNESS[m] + Math.abs(f) * (COLDNESS[n] - COLDNESS[m]);
+}
+const isTights = i => i?.category === 'legwear' && /tights/i.test(`${i.subtype || ''} ${i.name || ''}`);
+const pieceWarmth = p => thicknessOf(p) + ({ warm: 0.4, cool: -0.4 }[fabricInfo(p.fabric)?.warmth] || 0);
+const LEG_OPEN = { Skirt: 0.5, Culottes: 0.3, Shorts: 1.2, Mini: 0.8, Midi: 0.5, Maxi: 0.2, Slip: 0.6, Wrap: 0.5, 'Shirt dress': 0.6, 'Knit dress': 0.4 };
+const SHOE_WARMTH = { Sandals: 0.2, Mules: 0.6, Flats: 0.7, Heels: 0.7, Loafers: 1.2, Sneakers: 1.3, 'Ankle boots': 2.2, Boots: 2.6 };
+/** { torso, legs, feet, outer }: layers add up with diminishing returns; bare legs under a skirt or dress count as colder, unless with tights. */
+function warmthParts(pieces, tights = false) {
+  const tops = pieces.filter(p => slotOf(p) === 'top'), dress = pieces.find(p => slotOf(p) === 'dress'), bottom = pieces.find(p => slotOf(p) === 'bottom');
+  const layers = dress ? [...tops, dress] : tops;
+  const w = layers.map(p => pieceWarmth(p) - (layers.length === 1 && isSleeveless(p) ? 0.5 : 0)).sort((a, b) => b - a);
+  const leg = bottom || dress, open = LEG_OPEN[leg?.subtype] || 0;
+  const shoes = pieces.find(p => slotOf(p) === 'shoes'), outer = pieces.find(p => slotOf(p) === 'outer');
+  return {
+    torso: w.length ? w[0] + 0.5 * (w[1] || 0) + 0.3 * (w[2] || 0) : null,
+    legs: leg ? pieceWarmth(leg) - open + (open && tights ? 0.6 : 0) : null,
+    feet: shoes ? SHOE_WARMTH[shoes.subtype] ?? 1.2 : null,
+    outer: outer ? pieceWarmth(outer) : null
+  };
+}
+const partsOf = p => ({ top: ['torso'], bottom: ['legs'], dress: ['torso', 'legs'], shoes: ['feet'], outer: ['outer'] })[slotOf(p)] || [];
+/** How dressy the outfit is: the mean of everything but the coat (as the mirror check judges it). */
+function dressLevel(pieces) {
+  const inner = pieces.filter(p => slotOf(p) !== 'outer');
+  return inner.length ? inner.reduce((t, p) => t + dressinessOf(p), 0) / inner.length : 3;
+}
+
+/* Colour families, so "navy with brown clashes" also covers navy with chocolate. */
+const COLOUR_FAMILY = {
+  ivory: 'light', cream: 'light', white: 'light', oatmeal: 'light', beige: 'light', sand: 'light', stone: 'light', 'pale grey': 'light', 'light grey': 'light', silver: 'light',
+  grey: 'grey', charcoal: 'grey', black: 'black', espresso: 'brown', chocolate: 'brown', brown: 'brown', mocha: 'brown', taupe: 'brown',
+  camel: 'camel', tan: 'camel', khaki: 'camel', navy: 'navy', 'denim blue': 'blue', 'sky blue': 'blue', 'light blue': 'blue', cobalt: 'blue',
+  teal: 'green', 'forest green': 'green', olive: 'green', sage: 'green', emerald: 'green', mint: 'green',
+  burgundy: 'red', wine: 'red', red: 'red', rust: 'orange', terracotta: 'orange', orange: 'orange', coral: 'orange', peach: 'orange',
+  mustard: 'yellow', gold: 'yellow', 'butter yellow': 'yellow', blush: 'pink', 'dusty rose': 'pink', pink: 'pink', fuchsia: 'pink',
+  lilac: 'purple', plum: 'purple', lavender: 'purple'
+};
+function familyOf(p) {
+  const n = lc(p?.color?.name);
+  return COLOUR_FAMILY[n] || (p?.color?.hex ? COLOUR_FAMILY[lc(colorName(p.color.hex))] || '' : '');
+}
+const colourCount = pieces => new Set(pieces.filter(p => CLOTHING_SLOTS.has(slotOf(p))).map(familyOf).filter(Boolean)).size;
+
+const GOOD_TAGS = new Set(WEAR_TAGS.good), BAD_TAGS = new Set(WEAR_TAGS.bad), COMPLAINTS = new Set([...WEAR_TAGS.bad, ...VOTE_TAGS.bad]);
 const tagWeight = t => GOOD_TAGS.has(t) ? 0.5 : BAD_TAGS.has(t) ? -0.6 : 0;
 const pairKey = (a, b) => a < b ? a + '|' + b : b + '|' + a;
 const clampAbs = (v, m) => Math.max(-m, Math.min(m, v));
 const slotOf = i => categoryById(i?.category)?.slot;
+const addTo = (map, k, v) => map.set(k, (map.get(k) || 0) + v);
 const RECENT_MS = 5 * 864e5;
+const fade = at => 0.5 ** (Math.max(0, Date.now() - (at || 0)) / 3.156e10);   // half after a year
 
-/** Turn the outfit diary into a scoring model. wears: diary records; items: the closet. */
+/** The combination: every pair, or with pieces singled out only the pairs they are in. */
+function addCombo(m, pieces, w, blamed = new Set()) {
+  const n = pieces.length;
+  for (let i = 0; i < n; i++) {
+    if (!blamed.size) addTo(m.item, pieces[i].id, w / n / 2);
+    for (let j = i + 1; j < n; j++) {
+      if (blamed.size && !blamed.has(pieces[i].id) && !blamed.has(pieces[j].id)) continue;
+      addTo(m.pair, pairKey(pieces[i].id, pieces[j].id), w * 2 / n * (blamed.size ? 1.3 : 1));
+    }
+  }
+  blamed.forEach(id => addTo(m.item, id, w * 0.4));
+}
+function learnShape(m, pieces, w) {
+  const tops = pieces.filter(p => slotOf(p) === 'top'), top = tops[tops.length - 1], bottom = pieces.find(p => slotOf(p) === 'bottom');
+  if (top?.silhouette && bottom?.silhouette) addTo(m.shape, `${top.silhouette}|${bottom.silhouette}`, w);
+}
+/** Colour pairs (by name, and more gently by family). With accents in the look, two neutrals are rarely the clash. */
+function learnColours(m, pieces, w, blamed = new Set()) {
+  const cp = pieces.filter(p => CLOTHING_SLOTS.has(slotOf(p)) && (p.color?.name || p.color?.hex));
+  const accents = cp.some(p => !isNeutralPiece(p));
+  for (let i = 0; i < cp.length; i++) for (let j = i + 1; j < cp.length; j++) {
+    const a = cp[i], b = cp[j];
+    if (blamed.size && !blamed.has(a.id) && !blamed.has(b.id)) continue;
+    const f = !blamed.size && accents && isNeutralPiece(a) && isNeutralPiece(b) ? 0.4 : 1;
+    const na = lc(a.color?.name), nb = lc(b.color?.name), fa = familyOf(a), fb = familyOf(b);
+    if (na && nb && na !== nb) addTo(m.colour, pairKey(na, nb), w * f);
+    if (fa && fb) addTo(m.colourFam, pairKey(fa, fb), w * f * 0.5);
+  }
+}
+
+/**
+ * Learn from one reason. ctx: { pieces, at, occ (null = unknown), tights, blamed: Set of piece ids }.
+ * Returns true when the reason explains a dislike without blaming the combination (warmth, dressiness).
+ * May add to ctx.blamed when the reason points at one piece (a bulky coat).
+ */
+function absorbReason(m, ev, tag, ctx, s) {
+  const r = REASONS[tag], w = s * fade(ctx.at);
+  if (!r || !w) return false;
+  const { pieces, at, occ, blamed } = ctx;
+  switch (r.kind) {
+    case 'warmth': {
+      if (blamed.size) {                                                  // "the trench is too thin", "those flats are too cold": that part only
+        const which = [...new Set([...blamed].flatMap(id => partsOf(pieces.find(p => p.id === id))))];
+        if (!which.length) return false;
+        const parts = warmthParts(pieces, ctx.tights);
+        which.filter(k => parts[k] != null).forEach(k => ev.warmth.push({ at, part: k, kind: r.dir > 0 ? 'floor' : 'ceil', v: parts[k] + 0.5 * r.dir, c: coldnessAt(at), w }));
+        return true;
+      }
+      const parts = warmthParts(pieces, ctx.tights), have = (r.dir > 0 ? ['torso', 'legs', 'feet'] : ['torso', 'legs']).filter(k => parts[k] != null);
+      if (!have.length) return false;
+      const vals = have.map(k => parts[k]);
+      if (r.bulk) {   // "too bulky": heavy fabrics, a lot of volume, or a big coat — learn whichever it was
+        const base = pieces.filter(p => ['top', 'bottom', 'dress'].includes(slotOf(p)));
+        const volume = base.some(p => p.silhouette === 'Voluminous');
+        const heavy = base.some(p => thicknessOf(p) === 3) || Math.max(...vals) >= 2.6;
+        if (volume) learnShape(m, pieces, -0.5 * w);
+        if (!heavy) {
+          const coat = pieces.find(p => slotOf(p) === 'outer' && thicknessOf(p) === 3);
+          if (coat) { ev.warmth.push({ at, part: 'outer', kind: 'ceil', v: parts.outer - 0.5, c: coldnessAt(at), w }); return true; }
+          if (volume) return true;
+        }
+      }
+      const edge = r.dir > 0 ? Math.min(...vals) : Math.max(...vals);
+      have.filter(k => Math.abs(parts[k] - edge) <= 0.5)
+        .forEach(k => ev.warmth.push({ at, part: k, kind: r.dir > 0 ? 'floor' : 'ceil', v: parts[k] + 0.5 * r.dir, c: coldnessAt(at), w }));
+      return true;
+    }
+    case 'dress': {
+      if (occ == null || s < 0.75) return false;                         // unknown occasion, or only the AI said so
+      const off = pieces.filter(p => blamed.has(p.id));
+      if (r.dir && off.length) off.forEach(p => ev.slot.push({ at, key: `${occ}|${slotOf(p)}`, kind: r.dir > 0 ? 'floor' : 'ceil', v: dressinessOf(p) + 0.3 * r.dir, w }));
+      else if (r.dir || occ) { const d = dressLevel(pieces); ev.dress.push({ at, key: occ, kind: r.dir > 0 ? 'floor' : r.dir < 0 ? 'ceil' : 'ok', v: d + 0.25 * r.dir, d, w }); }
+      return true;
+    }
+    case 'colour': learnColours(m, pieces, r.dir * (r.dir > 0 ? 0.5 : 0.6) * w, blamed); return r.dir > 0;
+    case 'count':
+      m.colourCap.push({ cap: Math.max(2, colourCount(pieces) - 1), w });
+      if (blamed.size) learnColours(m, pieces, -0.4 * w, blamed);
+      return false;
+    case 'shape': learnShape(m, pieces, (r.dir > 0 ? 0.5 : -0.6) * w); return r.dir > 0;
+    default: return r.dir > 0;
+  }
+}
+
+/** A newer warmth limit replaces an older one it contradicts (same part, similar time of year). */
+function resolveWarmth(list) {
+  const out = [];
+  for (const e of list.sort((a, b) => (a.at || 0) - (b.at || 0))) {
+    for (let i = out.length - 1; i >= 0; i--) {
+      const o = out[i];
+      if (o.part !== e.part || o.kind === e.kind || Math.abs(o.c - e.c) > 0.3) continue;
+      const lo = e.kind === 'floor' ? e.v : o.v, hi = e.kind === 'floor' ? o.v : e.v;
+      if (lo > hi - 0.2) out.splice(i, 1);
+    }
+    out.push(e);
+  }
+  return out;
+}
+/** Dressiness limits per occasion (or per occasion and slot), newest last: a newer limit or a liked look overrides an older one it contradicts. */
+function resolveBands(list) {
+  const map = new Map();
+  for (const e of list.sort((a, b) => (a.at || 0) - (b.at || 0))) {
+    if (fade(e.at) < 0.25) continue;                                      // more than two years old
+    const b = map.get(e.key) || { lo: -Infinity, hi: Infinity, sum: 0, wsum: 0 };
+    if (e.kind === 'floor') { b.lo = Math.max(b.lo, e.v); if (b.hi < b.lo + 0.2) b.hi = Infinity; }
+    else if (e.kind === 'ceil') { b.hi = Math.min(b.hi, e.v); if (b.lo > b.hi - 0.2) b.lo = -Infinity; }
+    else { b.sum += e.w * e.d; b.wsum += e.w; if (e.d < b.lo) b.lo = e.d - 0.1; if (e.d > b.hi) b.hi = e.d + 0.1; }
+    map.set(e.key, b);
+  }
+  return map;
+}
+
+const hasTights = (ids, byId) => (ids || []).some(id => isTights(byId.get(id)));
+
+/** Turn the outfit diary and the quick votes into a scoring model. wears: diary records; items: the closet; votes: 👍 / 👎 with optional reasons. */
 export function learnFromWears(wears = [], items = [], votes = []) {
   const byId = new Map(items.map(i => [i.id, i]));
-  const m = { pair: new Map(), item: new Map(), shape: new Map(), colour: new Map(), recent: new Set(), lastWorn: new Map(), wears: [] };
-  const add = (map, k, v) => map.set(k, (map.get(k) || 0) + v);
+  const m = { pair: new Map(), item: new Map(), shape: new Map(), colour: new Map(), colourFam: new Map(), colourCap: [],
+    warmth: [], dress: new Map(), slotDress: new Map(), recent: new Set(), lastWorn: new Map(), wears: [] };
+  const ev = { warmth: [], dress: [], slot: [] };
   const now = Date.now();
   for (const w of wears) {
     const pieces = (w.pieceIds || []).map(id => byId.get(id)).filter(Boolean);
@@ -561,48 +790,56 @@ export function learnFromWears(wears = [], items = [], votes = []) {
     const overall = (WEAR_FEELS.find(f => f.id === w.feel)?.w || 0)
       + userTags.reduce((s, t) => s + tagWeight(t), 0)
       + 0.5 * (aiScore + aiTags.reduce((s, t) => s + tagWeight(t), 0));
-    const focused = set => userTags.filter(t => set.has(t)).reduce((s, t) => s + tagWeight(t), 0)
-      + 0.5 * aiTags.filter(t => set.has(t)).reduce((s, t) => s + tagWeight(t), 0);
+    // it went wrong only because it was too cold or too dressy that day: the pairing itself is barely to blame
+    const userBad = userTags.filter(t => BAD_TAGS.has(t));
+    const pairW = (overall < 0 && userBad.length && userBad.every(t => ['warmth', 'dress'].includes(REASONS[t]?.kind)) ? overall * 0.3 : overall) * fade(w.wornAt);
     const recent = now - (w.wornAt || 0) < RECENT_MS;
     pieces.forEach(p => { if ((w.wornAt || 0) > (m.lastWorn.get(p.id) || 0)) m.lastWorn.set(p.id, w.wornAt || 0); });
-
     for (let i = 0; i < pieces.length; i++) {
-      add(m.item, pieces[i].id, overall / pieces.length);
+      addTo(m.item, pieces[i].id, pairW / pieces.length);
       for (let j = i + 1; j < pieces.length; j++) {
         const k = pairKey(pieces[i].id, pieces[j].id);
-        add(m.pair, k, overall);
+        addTo(m.pair, k, pairW);
         if (recent) m.recent.add(k);
       }
     }
-    const tops = pieces.filter(p => slotOf(p) === 'top'), top = tops[tops.length - 1], bottom = pieces.find(p => slotOf(p) === 'bottom');
-    const shapeW = focused(SHAPE_TAGS);
-    if (shapeW && top?.silhouette && bottom?.silhouette) add(m.shape, `${top.silhouette}|${bottom.silhouette}`, shapeW);
-    const colourW = focused(COLOUR_TAGS);
-    if (colourW) {
-      const names = [...new Set(pieces.filter(p => CLOTHING_SLOTS.has(slotOf(p))).map(p => lc(p.color?.name)).filter(Boolean))];
-      for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) add(m.colour, pairKey(names[i], names[j]), colourW);
-    }
+    const ctx = { pieces, at: w.wornAt, occ: 'occasion' in w ? (w.occasion || '') : null, tights: hasTights(w.itemIds, byId), blamed: new Set() };
+    userTags.forEach(t => absorbReason(m, ev, t, ctx, 1));
+    aiTags.forEach(t => absorbReason(m, ev, t, ctx, 0.5));
     m.wears.push({ w, pieces, overall });
   }
-  // quick 👍 / 👎 on suggested looks: weaker than a real wear, but enough to steer the next suggestions
   for (const v of votes) {
     const pieces = (v.pieceIds || []).map(id => byId.get(id)).filter(Boolean);
     if (pieces.length < 2 || !v.vote) continue;
-    const w = v.vote > 0 ? 0.9 : -1.4;
-    for (let i = 0; i < pieces.length; i++) {
-      add(m.item, pieces[i].id, w / pieces.length / 2);
-      for (let j = i + 1; j < pieces.length; j++) add(m.pair, pairKey(pieces[i].id, pieces[j].id), w * 2 / pieces.length);   // spread over the pairs: it is the combination that was (dis)liked
+    const ids = new Set(pieces.map(p => p.id)), w = fade(v.at);
+    const ctx = { pieces, at: v.at, occ: v.occasion ?? null, tights: hasTights(v.itemIds, byId), blamed: new Set((v.off || []).filter(id => ids.has(id))) };
+    const tags = [...new Set(v.tags || [])].filter(t => REASONS[t]);
+    const explained = tags.map(t => absorbReason(m, ev, t, ctx, 1));
+    if (v.vote > 0) {
+      addCombo(m, pieces, 0.9 * w * (tags.includes('Very me') ? 1.5 : 1));
+      if (ctx.occ && !tags.includes('Right for the occasion')) ev.dress.push({ at: v.at, key: ctx.occ, kind: 'ok', d: dressLevel(pieces), w: 0.4 * w });
+      continue;
     }
+    // a dislike counts against the combination unless every reason given explains it another way
+    const negative = tags.map(t => COMPLAINTS.has(t));
+    if (!negative.some(Boolean) || negative.some((n, i) => n && !explained[i])) addCombo(m, pieces, -1.4 * w, ctx.blamed);
+    if (tags.includes('Not my style')) ctx.blamed.forEach(id => addTo(m.item, id, -0.6 * w));
   }
+  m.warmth = resolveWarmth(ev.warmth);
+  m.dress = resolveBands(ev.dress);
+  m.slotDress = resolveBands(ev.slot);
   m.wears.sort((a, b) => (b.w.wornAt || 0) - (a.w.wornAt || 0));
   return m;
 }
 
 let LEARN = null;   // set for the duration of buildLooks
-let JIT = 1;
-let WARM = false;        // how much randomness pickBest adds: 0 = the single best choice, higher = more variety
+let JIT = 1;        // how much randomness pickBest adds: 0 = the single best choice, higher = more variety
+let WARM = false;
 let CORE_IDS = new Set();
 let SHOWN = new Map();    // Restyle: piece id → how many looks already shown used it (core pieces excluded)
+let OCC = '';             // the occasion of the looks being built
+let CNOW = coldnessAt();  // how cold it is, 0 … 1 (see coldnessAt); set again by every buildLooks
+let TIGHTS = false;       // tights picked under Finishing touches
 
 /** Restyle: a piece already shown is pushed back — more for the main clothes than for the coat or shoes, so a new look really is new. */
 function shownPenalty(c) {
@@ -628,9 +865,77 @@ function learnedPair(a, b) {
   if (top && bottom) s += clampAbs(LEARN.shape.get(`${top.silhouette}|${bottom.silhouette}`) || 0, 3);
   const ca = lc(a.color?.name), cb = lc(b.color?.name);
   if (ca && cb && ca !== cb) s += clampAbs(LEARN.colour.get(pairKey(ca, cb)) || 0, 3);
+  const fa = familyOf(a), fb = familyOf(b);
+  if (fa && fb) s += clampAbs(LEARN.colourFam.get(pairKey(fa, fb)) || 0, 1.5);
   return s;
 }
-function learnedItem(c) { return LEARN && c ? clampAbs(LEARN.item.get(c.id) || 0, 2) : 0; }
+function learnedItem(c) { return LEARN && c ? clampAbs(LEARN.item.get(c.id) || 0, 2) + slotDressFit(c) : 0; }
+
+/** "Those sneakers are too casual for work": shoes for work have to be dressier than that, other occasions are untouched. */
+function slotDressFit(c) {
+  const b = LEARN?.slotDress?.get(`${OCC}|${slotOf(c)}`); if (!b) return 0;
+  const d = dressinessOf(c);
+  return -(Math.max(0, b.lo - d) + Math.max(0, d - b.hi)) * 2;
+}
+/** How much a warmth limit counts today: a "too thin" holds fully in the same or colder weather and fades as it gets milder; a "too bulky" the other way round. */
+function seasonWeight(k) {
+  const d = k.kind === 'floor' ? k.c - CNOW : CNOW - k.c;
+  return Math.max(0, Math.min(1, 1 - d / 0.3));
+}
+function learnedWarmth(part, val) {
+  let pen = 0;
+  for (const k of LEARN?.warmth || []) {
+    if (k.part !== part || val == null) continue;
+    const s = seasonWeight(k); if (!s) continue;
+    const gap = k.kind === 'floor' ? k.v - val : val - k.v;
+    if (gap > 0) pen += gap * 3.5 * s * k.w;
+  }
+  return Math.min(5, pen);
+}
+/** The default band for the time of year, moved wherever what they taught disagrees with it. */
+function warmthBand(lo, hi, part = null) {
+  for (const k of LEARN?.warmth || []) {
+    if ((part && k.part !== part) || seasonWeight(k) < 0.5) continue;
+    if (k.kind === 'ceil') lo = Math.min(lo, k.v - 0.1); else hi = Math.max(hi, k.v + 0.1);
+  }
+  return [lo, hi];
+}
+/* What a person reaches for at each time of year, for the top half and for the legs on their own (a warm knit does not make
+   linen trousers right for November): floor = a + b·cold, ceiling = c + d·cold. In deep winter a sweater or two layers on top,
+   jeans or wool on the legs; in high summer nothing heavier than a light knit or jeans. */
+const DEFAULT_WARMTH = { torso: [0.6, 1.5, 2.2, 1.8], legs: [0.4, 1.4, 1.8, 1.2], feet: [0.2, 1.0, 2.0, 1.0] };
+const DEFAULT_WEIGHT = { torso: 1.2, legs: 1.2, feet: 0.6 };
+const PARTS = ['torso', 'legs', 'feet', 'outer'];
+function defaultMiss(part, val) {
+  if (!DEFAULT_WARMTH[part] || val == null) return 0;
+  const [a, b, c, d] = DEFAULT_WARMTH[part];
+  const [F, G] = warmthBand(a + b * CNOW, c + d * CNOW, part);
+  return Math.max(0, F - val) + Math.max(0, val - G);
+}
+/** Whole outfit: each part warm enough for the time of year (but not too warm), and within every limit they taught.
+    For the default, a skirt or dress in the cold is assumed to be worn with tights, as most people would. */
+function warmthScore(pieces) {
+  const p = warmthParts(pieces, TIGHTS), worn = CNOW >= 0.5 && !TIGHTS ? warmthParts(pieces, true) : p;
+  let s = 0;
+  for (const part of PARTS) if (p[part] != null) s -= defaultMiss(part, worn[part]) * (DEFAULT_WEIGHT[part] || 0) + learnedWarmth(part, p[part]);
+  return s;
+}
+/** The same for one part while picking pieces: a bottom on its own, or the stack of tops so far. */
+function partFit(part, pieces) {
+  const p = warmthParts(pieces, TIGHTS)[part];
+  if (p == null) return 0;
+  const worn = CNOW >= 0.5 && !TIGHTS ? warmthParts(pieces, true)[part] : p;
+  return -(learnedWarmth(part, p) + defaultMiss(part, worn) * (DEFAULT_WEIGHT[part] || 0) * 0.7);
+}
+function dressBandPenalty(mean) {
+  const b = LEARN?.dress?.get(OCC); if (!b) return 0;
+  return -(Math.max(0, b.lo - mean) + Math.max(0, mean - b.hi)) * 2;
+}
+function colourCapPenalty(pieces) {
+  const caps = LEARN?.colourCap; if (!caps?.length) return 0;
+  const n = colourCount(pieces);
+  return -Math.min(3, caps.reduce((t, c) => t + Math.max(0, n - c.cap) * 1.2 * c.w, 0));
+}
 
 /* ---------- Look building ---------- */
 
@@ -651,11 +956,13 @@ function outfitPieces(o) {
   return [...o.top, o.bottom, o.dress, o.outer, o.shoes].filter(Boolean);
 }
 
+/** The second look avoids the first look's pieces — but the same coat or shoes is how people really dress, so those only count a little. */
+const REUSED = new Set(['outer', 'shoes']);
 function pickBest(cands, scoreFn, avoid, jitter = 0.5) {
   let best = null, bs = -Infinity;
   for (const c of cands) {
     let s = scoreFn(c) + learnedItem(c) + rotation(c) - shownPenalty(c) + Math.random() * jitter * JIT;
-    if (avoid.has(c.id)) s -= 6;
+    if (avoid.has(c.id)) s -= REUSED.has(slotOf(c)) ? 2 : 6;
     if (s > bs) { bs = s; best = c; }
   }
   return best;
@@ -680,7 +987,7 @@ export function pickSurpriseCore(items) {
   let best = null, bs = -Infinity;
   for (let n = 0; n < 12; n++) {
     const t = rnd(tops), b = rnd(bottoms);
-    const s = proportionScore(t, b, 'classic') + pairScore(t, b, mood, 'classic') + Math.random();
+    const s = proportionScore(t, b, 'classic') + pairScore(t, b, mood, 'classic') + partFit('legs', [b]) + 0.5 * partFit('torso', [t]) + Math.random();
     if (s > bs) { bs = s; best = [t.id, b.id]; }
   }
   return best;
@@ -738,19 +1045,20 @@ function completeOutfit(core, items, mood, intent, avoid) {
 
   if (!o.dress) {
     if (o.top.length && !o.bottom) {
-      o.bottom = pickBest(notCore(pool('bottom')), b => proportionScore(o.top[0], b, intent) * 1.3 + pairScore(o.top[0], b, mood, intent), avoid);
+      o.bottom = pickBest(notCore(pool('bottom')), b => proportionScore(o.top[0], b, intent) * 1.3 + pairScore(o.top[0], b, mood, intent) + partFit('legs', [b]), avoid);
     } else if (o.bottom && !o.top.length) {
-      const t = pickBest(notCore(pool('top')), t => proportionScore(t, o.bottom, intent) * 1.3 + pairScore(t, o.bottom, mood, intent) + mainTopBonus(t), avoid);
+      const t = pickBest(notCore(pool('top')), t => proportionScore(t, o.bottom, intent) * 1.3 + pairScore(t, o.bottom, mood, intent) + mainTopBonus(t) + 0.5 * partFit('torso', [t]), avoid);
       if (t) o.top.push(t);
     } else if (!o.top.length && !o.bottom) {
       const dresses = pool('dress'), tops = pool('top'), bottoms = pool('bottom');
+      const dressFit = d => vibeScore(d, mood) + 0.5 * (partFit('torso', [d]) + partFit('legs', [d]));
       if (dresses.length && (!(tops.length && bottoms.length) || intent === 'editorial')) {
-        o.dress = pickBest(dresses, d => vibeScore(d, mood), avoid);
+        o.dress = pickBest(dresses, dressFit, avoid);
       } else if (tops.length && bottoms.length) {
         const pair = pickSurpriseCore(items.filter(i => ['tops', 'bottoms'].includes(i.category)));
         pair.forEach(id => placeCore(o, items.find(i => i.id === id)));
       } else if (dresses.length) {
-        o.dress = pickBest(dresses, d => vibeScore(d, mood), avoid);
+        o.dress = pickBest(dresses, dressFit, avoid);
       }
     }
   }
@@ -761,28 +1069,31 @@ function completeOutfit(core, items, mood, intent, avoid) {
   // Layering: a blouse under a knit, a knit or cardigan over a blouse, or blouse → thin sweater → cardigan.
   // The classic look adds one layer in the cold months (or over a sleeveless base); the editorial one goes up to three.
   if (!o.dress && o.top.length && o.bottom) {
-    const maxTops = intent === 'editorial' ? (COLD ? 3 : 2) : (COLD || isSleeveless(o.top[0]) ? 2 : 1);
+    const torsoFit = tops => partFit('torso', tops);
+    const needLayer = torsoFit(o.top) < -0.5;                    // too thin on its own for the time of year, or for what they taught
+    const maxTops = intent === 'editorial' ? (COLD ? 3 : 2) : (COLD || needLayer || isSleeveless(o.top[0]) ? 2 : 1);
     while (o.top.length < maxTops) {
       const visible = o.top[o.top.length - 1];
       const layer = pickBest(
         notCore(pool('top')).filter(t => !o.top.some(x => x.id === t.id) && orderStack([...o.top, t]).ok),
         t => pairScore(t, visible, mood, intent) + o.top.reduce((n, x) => n + layerPair(x, t).penalty, 0)
           + (COLD && fabricInfo(t.fabric)?.warmth === 'warm' ? 0.6 : 0)
-          + (intent === 'editorial' && (t.silhouette === 'Relaxed' || t.silhouette === 'Voluminous') ? 0.8 : 0),
+          + (intent === 'editorial' && (t.silhouette === 'Relaxed' || t.silhouette === 'Voluminous') ? 0.8 : 0)
+          + torsoFit([...o.top, t]),
         avoid, 0.8
       );
-      if (!layer) break;
+      if (!layer || torsoFit([...o.top, layer]) < torsoFit(o.top) - 1) break;   // every layer would be too bulky for them: stop here
       o.top = orderStack([...o.top, layer]).tops;
     }
   }
 
   if (!o.outer && pool('outer').length && base) {
     const under = o.dress ? [o.dress] : o.top;
-    o.outer = pickBest(pool('outer'), c => pairScore(c, anchor, mood, intent) + outerLayerPenalty(under, c) + (intent === 'classic' && c.silhouette === 'Relaxed' ? 0.5 : 0), avoid, 0.7);
+    o.outer = pickBest(pool('outer'), c => pairScore(c, anchor, mood, intent) + outerLayerPenalty(under, c) + (intent === 'classic' && c.silhouette === 'Relaxed' ? 0.5 : 0) + partFit('outer', [c]), avoid, 0.7);
     if (o.outer && outerLayerPenalty(under, o.outer) <= -8) o.outer = null;   // would not sit over what is underneath: skip it
   }
   if (!o.shoes && pool('shoes').length && base) {
-    o.shoes = pickBest(pool('shoes'), s => harmony(s.color?.hex, anchor.color?.hex) + (intent === 'classic' && s.contrast === 'Dark' ? 1 : 0) + vibeScore(s, mood) + learnedPair(s, anchor), avoid, 0.7);
+    o.shoes = pickBest(pool('shoes'), s => harmony(s.color?.hex, anchor.color?.hex) + (intent === 'classic' && s.contrast === 'Dark' ? 1 : 0) + vibeScore(s, mood) + learnedPair(s, anchor) + partFit('feet', [s]), avoid, 0.7);
   }
   o.jewelry = pickJewelry(o, items, mood, intent, avoid);
   return o;
@@ -1025,7 +1336,7 @@ function diaryNote(pieces) {
   return t;
 }
 
-function buildLookObject(title, tagline, outfit, finish, mood, intent) {
+function buildLookObject(title, tagline, outfit, finish, mood, intent, occasion = '') {
   const pieces = outfitPieces(outfit);
   const accessories = [...['legwear', 'belt'].map(k => finish[k]), ...(outfit.jewelry || []), ...['hair', 'nails', 'makeup', 'perfume'].map(k => finish[k])].filter(Boolean);
   const notes = [
@@ -1046,6 +1357,7 @@ function buildLookObject(title, tagline, outfit, finish, mood, intent) {
     id: 'look-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     title, tagline,
     mood: mood.key,
+    occasion,
     itemIds: [...pieces, ...accessories].map(i => i.id),
     pieceIds: pieces.map(i => i.id),
     key: outfitKey(outfit),
@@ -1104,6 +1416,7 @@ const WARM_MONTHS = [4, 5, 6, 7, 8];
 function seasonOK(i, warm) {
   const s = `${i.subtype || ''} ${i.name || ''}`;
   if (COLD && /\b(sandals?|shorts)\b/i.test(s)) return false;
+  if (CNOW >= 0.75 && ['bottoms', 'dresses'].includes(i.category) && fabricInfo(i.fabric)?.warmth === 'cool' && thicknessOf(i) === 1) return false;   // light linen or chiffon in deep winter
   if (COLD && i.category === 'tops' && /tee|tank|cami/i.test(s) && isSleeveless(i)) return true;   // fine as a base layer
   if (warm && (/\b(puffer|coat|faux fur|shearling)\b/i.test(s) || (i.category !== 'shoes' && thicknessOf(i) === 3))) return false;
   if (warm && /\b(boots?)\b/i.test(s) && !/ankle/i.test(s)) return false;
@@ -1180,6 +1493,8 @@ function outfitScore(o, mood, intent, target) {
   if (!o.shoes) s -= 0.8;
   if (o.outer && WARM && thicknessOf(o.outer) >= 2) s -= 1.2;   // summer: a coat only if it is light
   if (WARM && o.top.length > 1 && o.top.some(t => fabricInfo(t.fabric)?.warmth === 'warm' || thicknessOf(t) >= 2)) s -= 2;   // no knit layers in the heat
+  // warm enough for the time of year, and within what they taught: warmth, dressiness for this occasion, how many colours
+  s += warmthScore(pieces) + dressBandPenalty(mean) + colourCapPenalty(pieces) + pieces.reduce((t, p) => t + slotDressFit(p), 0);
   return s;
 }
 
@@ -1194,7 +1509,7 @@ function mirrorCheck(core, pool, mood, intent, avoid, target, shown = new Set(),
     const key = outfitKey(o);
     if (seen.has(key)) continue;
     if (shown.has(key)) { skipped.push(o); continue; }         // Restyle: already shown, look further
-    const overlap = outfitPieces(o).filter(p => avoid.has(p.id)).length;
+    const overlap = outfitPieces(o).filter(p => avoid.has(p.id)).reduce((t, p) => t + (REUSED.has(slotOf(p)) ? 0.35 : 1), 0);
     const repeat = outfitPieces(o).reduce((t, p) => t + shownPenalty(p), 0);
     seen.set(key, { o, score: outfitScore(o, mood, intent, target) - overlap * 2 - repeat });
   }
@@ -1207,10 +1522,15 @@ function mirrorCheck(core, pool, mood, intent, avoid, target, shown = new Set(),
  * Build exactly two looks.
  * items: all closet items. coreIds: >=1 chosen item ids. finish: { belt, jewelry, hair, nails, makeup, perfume } (items or null).
  */
-export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {}, history = null, occasion = '', shown = [], month = new Date().getMonth() }) {
+export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodChips = null, finish = {}, history = null, occasion = '', shown = [], month = null, date = null }) {
+  const when = date ?? (month == null ? Date.now() : new Date(new Date().getFullYear(), month, 15).getTime());
+  const mon = new Date(when).getMonth();
   LEARN = history;
-  COLD = [9, 10, 11, 0, 1, 2, 3].includes(month);
-  const warm = WARM = WARM_MONTHS.includes(month);
+  COLD = COLD_MONTHS.includes(mon);
+  const warm = WARM = WARM_MONTHS.includes(mon);
+  CNOW = coldnessAt(when);
+  OCC = occasion || '';
+  TIGHTS = isTights(finish.legwear);
   const core = coreIds.map(id => items.find(i => i.id === id)).filter(Boolean);
   if (!core.length) return { error: 'Pick at least one core piece from your closet, or tap Surprise Me.' };
   CORE_IDS = new Set(core.map(c => c.id));
@@ -1220,7 +1540,11 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodC
   // 1. context: how dressy today is — the occasion if one was picked, otherwise the hero piece sets the level
   const occ = OCCASIONS.find(o => o.id === occasion);
   const coreLevel = core.reduce((t, c) => t + dressinessOf(c), 0) / core.length;
-  const target = occ ? occ.target * 0.6 + coreLevel * 0.25 + mood.level * 0.15 : coreLevel * 0.5 + mood.level * 0.5;
+  let target = occ ? occ.target * 0.6 + coreLevel * 0.25 + mood.level * 0.15 : coreLevel * 0.5 + mood.level * 0.5;
+  // what they taught for this occasion: looks they liked pull the level towards them, "too casual" / "too dressy" set limits
+  const band = history?.dress?.get(OCC);
+  if (band?.wsum) { const k = Math.min(1, 2 / band.wsum); target = (2 * target + k * band.sum) / (2 + k * band.wsum); }   // at most halfway
+  if (band) target = Math.min(Math.max(target, band.lo), band.hi);
   // hard filters a person would apply before even looking: wrong season, or far too casual / too dressy
   const fits = i => CORE_IDS.has(i.id) || !CLOTHING_SLOTS.has(slotOf(i)) || (seasonOK(i, warm) && Math.abs(dressinessOf(i) - target) <= 1.75);
   let base = items.filter(fits);
@@ -1258,7 +1582,7 @@ export function buildLooks({ items, coreIds, moodText = '', moodChip = '', moodC
 
   const T1 = ['The Polished Classic', 'Balanced proportions, a defined waist and light-to-dark contrast.'];
   const T2 = ['The Effortless Editorial', 'A distinct pairing with a cooler, more undone point of view.'];
-  const mk = (c, T, f, intent) => buildLookObject(T[0], T[1], fixJewel(c.o), f, mood, intent);
+  const mk = (c, T, f, intent) => buildLookObject(T[0], T[1], fixJewel(c.o), f, mood, intent, OCC);
   const look1 = mk(c1[0], T1, f1, 'classic');
   const look2 = mk(c2[0], T2, f2, 'editorial');
   // the next-best options, for an AI stylist to choose from

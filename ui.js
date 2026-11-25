@@ -260,7 +260,7 @@ function updateCoreSummary() {
 
 function lookCard(look, idx, saved, votable = false) {
   const pieces = look.itemIds.map(itemById).filter(Boolean);
-  const v = votable && look.key ? S.voteOf(look.key) : 0;
+  const rec = votable && look.key ? S.voteRecord(look.key) : null, v = rec?.vote || 0;
   return `
   <article class="look card" data-look-id="${look.id}">
     <header class="look-head">
@@ -275,9 +275,44 @@ function lookCard(look, idx, saved, votable = false) {
     </dl>
     ${votable && look.key ? `<div class="vote" role="group" aria-label="Would you wear this?"><span>Would you wear this?</span>
       <button class="chip ${v > 0 ? 'on' : ''}" data-act="vote" data-v="1" data-look-id="${look.id}" aria-pressed="${v > 0}">👍 Yes</button>
-      <button class="chip ${v < 0 ? 'on' : ''}" data-act="vote" data-v="-1" data-look-id="${look.id}" aria-pressed="${v < 0}">👎 Not me</button></div>` : ''}
+      <button class="chip ${v < 0 ? 'on' : ''}" data-act="vote" data-v="-1" data-look-id="${look.id}" aria-pressed="${v < 0}">👎 Not me</button></div>
+      ${rec ? voteWhyHTML(look, rec, pieces) : ''}` : ''}
     <button class="btn ghost wide" data-act="wore-look" data-look-id="${look.id}">I wore this · add a photo</button>
   </article>`;
+}
+
+/** Optional: why the look was (not) right. Every tap is saved and teaches the next looks; nothing here is required. */
+function voteWhyHTML(look, rec, pieces) {
+  const base = rec.vote > 0 ? E.VOTE_TAGS.good : E.VOTE_TAGS.bad, on = new Set(rec.tags || []), off = new Set(rec.off || []);
+  const tags = [...base, ...[...on].filter(t => !base.includes(t))];
+  const chip = (act, val, label, sel) => `<button type="button" class="chip ${sel ? 'on' : ''}" data-act="${act}" data-look-id="${look.id}" data-val="${esc(val)}" aria-pressed="${sel}">${esc(label)}</button>`;
+  return `<div class="vote-why" data-why="${look.id}">
+    <p class="hint">${rec.vote > 0 ? 'What did you like?' : 'What felt off?'} <small>optional</small></p>
+    <div class="chips">${tags.map(t => chip('vote-tag', t, t, on.has(t))).join('')}</div>
+    ${rec.vote < 0 ? `<p class="hint">Which piece? <small>optional</small></p>
+    <div class="chips">${pieces.map(p => chip('vote-off', p.id, p.name, off.has(p.id))).join('')}</div>` : ''}
+    <input type="text" class="vote-note" data-look-id="${look.id}" value="${esc(rec.note || '')}" placeholder="${rec.vote > 0 ? 'Anything else? (optional)' : 'In your words, e.g. too thin for this weather (optional)'}" aria-label="Note on this look">
+  </div>`;
+}
+
+/** The free note: saved, and the reasons it means are switched on (as chips they can switch off again). The DOM is updated in place, so a chip tapped right after typing still lands. */
+function saveVoteNote(input) {
+  const look = state.studio.result?.looks?.find(l => l.id === input.dataset.lookId);
+  const rec = look?.key && S.voteRecord(look.key);
+  if (!rec) return;
+  const note = input.value.trim();
+  if (note === (rec.note || '')) return;
+  const found = E.noteTags(note).filter(t => !(rec.tags || []).includes(t));
+  S.setVoteReasons(look.key, { note, tags: [...(rec.tags || []), ...found] });
+  const box = $(`[data-why="${look.id}"] .chips`);
+  found.forEach(t => {
+    const b = box && [...box.querySelectorAll('[data-act="vote-tag"]')].find(x => x.dataset.val === t);
+    if (b) { b.classList.add('on'); b.setAttribute('aria-pressed', 'true'); }
+    else box?.insertAdjacentHTML('beforeend', `<button type="button" class="chip on" data-act="vote-tag" data-look-id="${look.id}" data-val="${esc(t)}" aria-pressed="true">${esc(t)}</button>`);
+  });
+  if (!note) return;
+  const says = found.map(t => E.reasonNote(t, rec.occasion)).filter(Boolean);
+  toast(says.length ? `Got it — ${says.join(', ')}` : 'Noted — I’ll remember that');
 }
 
 function updateSegCounts() {
@@ -364,7 +399,7 @@ async function aiJudge(r, ai) {
   const WHY = 'Why your AI stylist chose it';
   try {
     const pick = await G.judgeLooks({ key: ai.key, model: ai.model || G.DEFAULT_MODEL, alternatives: r.alternatives, closet: state.items,
-      profile: S.getProfile(), mood: r.mood, feeling: r.feeling, occasion: r.occasion, season: r.season });
+      profile: S.getProfile(), mood: r.mood, feeling: r.feeling, occasion: r.occasion, season: r.season, votes: S.getVotes() });
     if (state.studio.result !== r) return;
     const use = (k, i) => {
       const p = pick[k]; if (!p) return;
@@ -422,9 +457,24 @@ function wireStudio() {
         const look = s.result?.looks?.find(l => l.id === b.dataset.lookId);
         if (!look?.key) break;
         const v = +b.dataset.v, cur = S.voteOf(look.key);
-        S.setVote(look.key, look.pieceIds, cur === v ? 0 : v);
+        S.setVote(look.key, look.pieceIds, cur === v ? 0 : v, { occasion: look.occasion ?? s.occasion, itemIds: look.itemIds });
         toast(cur === v ? 'Vote removed' : v > 0 ? 'Noted — more like this' : 'Noted — fewer like this');
         renderResults();
+        break;
+      }
+      case 'vote-tag': case 'vote-off': {
+        const look = s.result?.looks?.find(l => l.id === b.dataset.lookId);
+        const rec = look?.key && S.voteRecord(look.key);
+        if (!rec) break;
+        const field = b.dataset.act === 'vote-tag' ? 'tags' : 'off', val = b.dataset.val;
+        const list = new Set(rec[field] || []), on = !list.has(val);
+        if (on) list.add(val); else list.delete(val);
+        S.setVoteReasons(look.key, { [field]: [...list] });
+        b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+        if (on) {
+          const say = field === 'tags' ? E.reasonNote(val, rec.occasion) : `${itemById(val)?.name || 'that piece'} paired differently`;
+          if (say) toast(`Got it — ${say}`);
+        }
         break;
       }
       case 'mood-chip': {
@@ -487,9 +537,11 @@ function wireStudio() {
     }
   });
   v.addEventListener('change', e => {
+    if (e.target.classList.contains('vote-note')) { saveVoteNote(e.target); return; }
     const k = e.target.dataset?.finish;
     if (k) { state.studio.finish[k] = e.target.value; staleResult(); }
   });
+  v.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList.contains('vote-note')) { e.preventDefault(); e.target.blur(); } });
   v.addEventListener('toggle', e => {
     if (e.target.id === 'finish-fold') state.studio.openFinish = e.target.open;
     if (e.target.id === 'core-fold') state.studio.openCore = e.target.open;
@@ -565,7 +617,7 @@ function openWearSheet({ look, wearId }) {
   state.wear = ex
     ? { ...structuredClone(ex), isNew: false, blob: null, previewUrl: ex.hasPhoto ? S.photoURLSync(ex.id) : '', ownUrl: false, busy: false }
     : {
-        id: S.newId('w'), isNew: true, lookId: look.id, title: look.title, mood: look.mood,
+        id: S.newId('w'), isNew: true, lookId: look.id, title: look.title, mood: look.mood, ...(look.occasion != null ? { occasion: look.occasion } : {}),
         pieceIds: [...(look.pieceIds?.length ? look.pieceIds : look.itemIds)], itemIds: [...look.itemIds],
         feel: '', tags: [], notes: '', ai: null, wornAt: Date.now(), hasPhoto: false,
         blob: null, previewUrl: '', ownUrl: false, busy: false
@@ -655,7 +707,7 @@ async function handleWearPhoto(file) {
 
 function wearPayload(w) {
   return {
-    id: w.id, lookId: w.lookId, title: w.title, mood: w.mood, pieceIds: w.pieceIds, itemIds: w.itemIds,
+    id: w.id, lookId: w.lookId, title: w.title, mood: w.mood, ...(w.occasion != null ? { occasion: w.occasion } : {}), pieceIds: w.pieceIds, itemIds: w.itemIds,
     feel: w.feel, tags: w.tags, notes: (w.notes || '').trim(), ai: w.ai || null,
     wornAt: w.wornAt, hasPhoto: !!(w.hasPhoto || w.blob), createdAt: w.createdAt || Date.now()
   };
@@ -1512,7 +1564,7 @@ async function sendChat(retry = false) {
   try {
     const res = await G.chat({
       key: ai.key, model: ai.model || G.DEFAULT_MODEL, messages: msgs, photo, signal: ctrl.signal,
-      closet: state.items, profile: S.getProfile(), wears: S.getWears(), looks: S.getLooks()
+      closet: state.items, profile: S.getProfile(), wears: S.getWears(), looks: S.getLooks(), votes: S.getVotes()
     });
     reply = { id: S.newId('m'), role: 'model', text: res.reply, outfits: res.outfits, packing: res.packing, gaps: res.gaps, at: Date.now() };
   } catch (err) {
