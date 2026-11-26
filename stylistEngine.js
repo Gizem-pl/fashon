@@ -320,7 +320,8 @@ export function suggestFromText(text) {
   const fab = fabricInfo(t);
   const thickness = /(chunky|thick|heavy|bulky|cable[- ]?knit|fleece|puffer)/.test(t) ? 'Thick'
     : /(thin|fine[- ]?knit|lightweight|light[- ]?weight|sheer|delicate|gauzy)/.test(t) ? 'Light' : '';
-  const sleeves = /(sleeveless|\btank\b|camisole|\bcami\b|\bvest\b)/.test(t) ? 'Sleeveless' : '';
+  // the same words isSleeveless reads in a name: the sheet saves Sleeved / Sleeveless explicitly, so a word missing here would never count
+  const sleeves = /(sleeveless|\btank\b|camisole|\bcami\b|\bvest\b|strappy|spaghetti|pinafore)/.test(t) ? 'Sleeveless' : '';
   if (!hit && !fab && !thickness && !sleeves) return null;
   return { ...(hit || {}), fabric: fab ? fab.label : '', thickness, sleeves };
 }
@@ -881,8 +882,12 @@ function keepApart(ev, pieces, blamed, at, w) {
   const picked = pieces.filter(p => blamed.has(p.id)), k = picked.length;
   for (let i = 0; i < k; i++) for (let j = i + 1; j < k; j++) ev.apart.push({ k: pairKey(picked[i].id, picked[j].id), at: at || 0, w: w / (k - 1) });
 }
-const likedTogether = (ev, pieces, at) => {
+/** Pairs liked on this date, which lifts an older "keep apart" (the newer verdict wins). picked: pieces singled out on a 👍 —
+    then only what was praised counts: the pairings of the one piece that makes it, or the pairings among two or more. */
+const likedTogether = (ev, pieces, at, picked = new Set(), together = false) => {
   for (let i = 0; i < pieces.length; i++) for (let j = i + 1; j < pieces.length; j++) {
+    const a = picked.has(pieces[i].id), b = picked.has(pieces[j].id);
+    if (picked.size && (together ? !(a && b) : !(a || b))) continue;
     const k = pairKey(pieces[i].id, pieces[j].id);
     ev.liked.set(k, Math.max(ev.liked.get(k) || 0, at || 0));
   }
@@ -1045,7 +1050,7 @@ export function learnFromWears(wears = [], items = [], votes = []) {
       const lift = 0.9 * w * (tags.includes('Very me') ? 1.5 : 1);
       if (ctx.together) { addCombo(m, pieces.filter(p => blamed.has(p.id)), lift); addCombo(m, pieces, 0.3 * lift); }
       else addCombo(m, pieces, lift, blamed);
-      likedTogether(ev, pieces, v.at);
+      likedTogether(ev, pieces, v.at, blamed, ctx.together);
       if (ctx.occ && !tags.includes('Right for the occasion')) ev.dress.push({ at: v.at, key: ctx.occ, kind: 'ok', d: dressLevel(pieces), w: 0.4 * w });
       continue;
     }
@@ -1324,8 +1329,10 @@ function completeOutfit(core, items, mood, intent, avoid) {
 
   if (!o.dress) {
     // a cardigan, sweater or blazer goes over a dress too, a thin top under a slip dress: some tries build the top on a dress
-    // instead of a skirt or trousers (the editorial look more often), and the mirror check judges both
-    const onDress = o.top.length && !o.bottom && JIT > 0 && Math.random() < (intent === 'editorial' ? 0.4 : 0.2)
+    // instead of a skirt or trousers (the editorial look more often), and the mirror check judges both.
+    // With no skirt or trousers to go with it, a dress is the only way to finish the outfit: always try one.
+    const noBottom = !notCore(pool('bottom')).length;
+    const onDress = o.top.length && !o.bottom && (noBottom || (JIT > 0 && Math.random() < (intent === 'editorial' ? 0.4 : 0.2)))
       ? notCore(pool('dress')).filter(d => dressStack(d, o.top).ok && !keptApart(d, o.top)) : [];
     if (onDress.length) {
       const outerTop = o.top[o.top.length - 1];

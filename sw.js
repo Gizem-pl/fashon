@@ -1,6 +1,6 @@
 /* Offline shell: network-first for app files so updates show up straight away; the cache is only the offline fallback.
    Photos live in IndexedDB, not here. */
-const CACHE = 'fashon-v27';
+const CACHE = 'fashon-v28';
 const ASSETS = ['./', './index.html', './style.css', './ui.js', './wardrobeStore.js', './stylistEngine.js', './geminiStylist.js',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
