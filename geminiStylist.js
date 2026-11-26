@@ -145,6 +145,7 @@ const RULES = `Styling rules this app follows (keep to them):
 - A complete outfit is a top + bottom, or a dress, plus shoes; add outerwear when it is cold.
 - Never layer two sleeved knits. Never put a thick piece under another top. A thinner piece cannot go over a thicker one (jackets and coats excepted).
 - A sleeveless knit or vest goes over a thin sleeved base such as a blouse or tee.
+- A dress can be layered: a cardigan or blazer over most dresses; a sweater over a light dress such as a slip dress (it then reads as a skirt), never over a knit or heavy dress; in the cold, a thin close-fitting sleeved top (turtleneck, tee — not a collared blouse) under a slip or sleeveless dress. One layer under and one over at most.
 - Keep volume to one half of the outfit; define the waist when it helps.
 - Balance light/medium pieces against dark ones, softly: navy, charcoal or chocolate against cream reads richer than black against white.
 ${COLOUR_RULES}`;
@@ -164,9 +165,12 @@ function voteLines(votes = [], byId) {
   return votes.slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 15).map(v => {
     const names = (v.pieceIds || []).map(id => byId.get(id)?.name).filter(Boolean).join(', ');
     const off = (v.off || []).map(id => byId.get(id)?.name).filter(Boolean);
-    // two or more picked: the problem is those pieces together (worn together, or one inside the other), not each one on its own
-    const together = off.length >= 2 && (!v.tags?.length || v.tags.some(isTogetherTag));
-    const problem = together ? ` — the problem: ${off.join(' with ')} together (each is fine on its own)` : off.length ? ` — the problem: ${off.join(', ')}` : '';
+    // on a 👎, two or more picked: the problem is those pieces together (worn together, or one inside the other), not each one on its own.
+    // On a 👍, the pieces picked are what they liked: one is the piece that makes it, two or more go well together.
+    const together = off.length >= 2 && (v.vote > 0 || !v.tags?.length || v.tags.some(isTogetherTag));
+    const problem = v.vote > 0
+      ? (together ? ` — what they liked: ${off.join(' with ')} together` : off.length ? ` — what they liked most: ${off.join(', ')}` : '')
+      : together ? ` — the problem: ${off.join(' with ')} together (each is fine on its own)` : off.length ? ` — the problem: ${off.join(', ')}` : '';
     // a reason the note seems to say but they switched off: the note does not mean that
     const muted = v.note && v.muted?.length ? ` (they said this is not about: ${v.muted.join(', ').toLowerCase()})` : '';
     return `- ${new Date(v.at).toLocaleDateString('en-GB')}: ${v.vote > 0 ? 'would wear' : 'not for them'}: ${names}${v.tags?.length ? ` — why: ${v.tags.join(', ').toLowerCase()}` : ''}${problem}${v.note ? ` — note: ${v.note}${muted}` : ''}`;

@@ -96,7 +96,7 @@ export async function deleteWear(id) {
 
 /* ---------- Quick 👍 / 👎 on suggested looks — teaches the Studio your taste:
    { id (outfit key), pieceIds, itemIds (with accessories, e.g. tights), vote: 1 | -1, at, occasion, tags: [], off: [piece ids], note, muted: [] }
-   The why (tags, off, note) is all optional. muted: reasons the note implies that they switched off, so editing the note does not bring them back.
+   The why (tags, off, note) is all optional. off: the pieces singled out — on a 👎 the problem, on a 👍 what makes it. muted: reasons the note implies that they switched off, so editing the note does not bring them back.
    Only what is saved here is learned from: switching a reason or a piece off leaves no trace. ---------- */
 
 export function getVotes() { return read(LS.votes, []); }

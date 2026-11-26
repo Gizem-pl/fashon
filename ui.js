@@ -284,12 +284,13 @@ function lookCard(look, idx, saved, votable = false) {
     ${votable && look.key ? `<div class="vote" role="group" aria-label="Would you wear this?"><span>Would you wear this?</span>
       <button class="chip ${v > 0 ? 'on' : ''}" data-act="vote" data-v="1" data-look-id="${look.id}" aria-pressed="${v > 0}">👍 Yes</button>
       <button class="chip ${v < 0 ? 'on' : ''}" data-act="vote" data-v="-1" data-look-id="${look.id}" aria-pressed="${v < 0}">👎 Not me</button></div>
-      ${rec ? voteWhyHTML(look, rec, pieces) : ''}` : ''}
+      ${rec ? voteWhyHTML(look, rec, (look.pieceIds?.length ? look.pieceIds : look.itemIds).map(itemById).filter(Boolean)) : ''}` : ''}
     <button class="btn ghost wide" data-act="wore-look" data-look-id="${look.id}">I wore this · add a photo</button>
   </article>`;
 }
 
-/** Optional: why the look was (not) right. Every tap is saved and teaches the next looks; nothing here is required. */
+/** Optional: why the look was (not) right. Every tap is saved and teaches the next looks; nothing here is required.
+    pieces: the clothes in the look (what the Studio learns from), so "Which piece?" never offers the perfume or the tights. */
 function voteWhyHTML(look, rec, pieces) {
   const base = rec.vote > 0 ? E.VOTE_TAGS.good : E.VOTE_TAGS.bad, on = new Set(rec.tags || []), off = new Set(rec.off || []);
   const tags = [...base, ...[...on].filter(t => !base.includes(t))];
@@ -297,7 +298,7 @@ function voteWhyHTML(look, rec, pieces) {
   return `<div class="vote-why" data-why="${look.id}">
     <p class="hint">${rec.vote > 0 ? 'What did you like?' : 'What felt off?'} <small>optional</small></p>
     <div class="chips">${tags.map(t => chip('vote-tag', t, t, on.has(t))).join('')}</div>
-    ${rec.vote < 0 ? `<p class="hint">Which piece? <small>optional · pick two if it’s those two together</small></p>
+    ${pieces.length > 1 ? `<p class="hint">Which piece? <small>optional · ${rec.vote > 0 ? 'the one that makes it, or two that go well together' : 'pick two if it’s those two together'}</small></p>
     <div class="chips">${pieces.map(p => chip('vote-off', p.id, p.name, off.has(p.id))).join('')}</div>` : ''}
     <input type="text" class="vote-note" data-look-id="${look.id}" value="${esc(rec.note || '')}" placeholder="${rec.vote > 0 ? 'Anything else? (optional)' : 'In your words, e.g. too thin for this weather (optional)'}" aria-label="Note on this look">
   </div>`;
@@ -489,11 +490,12 @@ function wireStudio() {
         S.setVoteReasons(look.key, patch);
         b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
         if (on) {
-          // two or more pieces picked: "these don't go together" (the engine only counts the clothes, not jewelry or tights)
+          // pieces picked: on a 👎 two or more are "these don't go together", on a 👍 "these go well together", one is "this piece makes it"
+          const liked = rec.vote > 0;
           const names = (field === 'off' ? [...list] : rec.off || []).filter(id => (look.pieceIds || look.itemIds).includes(id)).map(id => itemById(id)?.name || 'that piece');
           const say = field === 'tags'
-            ? (names.length >= 2 ? E.pickNote(names, [val], rec.occasion) : E.reasonNote(val, rec.occasion))
-            : names.length >= 2 ? E.pickNote(names, rec.tags || [], rec.occasion) : `${itemById(val)?.name || 'that piece'} paired differently`;
+            ? (names.length >= 2 && !liked ? E.pickNote(names, [val], rec.occasion) : E.reasonNote(val, rec.occasion))
+            : E.pickNote(names, rec.tags || [], rec.occasion, liked);
           if (say) toast(`Got it — ${say}`);
         }
         break;
@@ -938,10 +940,12 @@ function wireCloset() {
 const THICK_CATS = ['tops', 'bottoms', 'dresses', 'outerwear'];
 const usesThick = c => THICK_CATS.includes(c);
 const needsFabric = c => CLOTHING_CATS.includes(c);
+/** Tops and dresses say whether they have sleeves: it decides what layers with them (a top only goes under a sleeveless dress). */
+const hasSleeves = c => c === 'tops' || c === 'dresses';
 
 function autoSleeves(d) {
-  if (d.category !== 'tops' || d.sleevesTouched) return;
-  d.sleeves = /(sleeveless|vest|corset|bustier)/i.test(d.subtype || '') ? 'Sleeveless' : 'Sleeved';
+  if (!hasSleeves(d.category) || d.sleevesTouched) return;
+  d.sleeves = /(sleeveless|vest|corset|bustier)/i.test(d.subtype || '') || (d.category === 'dresses' && d.subtype === 'Slip') ? 'Sleeveless' : 'Sleeved';
 }
 function isPerfume(d) { return d.category === 'perfume'; }
 function autoThickness(d) {
@@ -965,7 +969,7 @@ function openItemSheet(id) {
       fabricMix: existing.fabricMix || (fi && (existing.fabric || '').toLowerCase() !== E.fabricList(existing.fabric).join(', ').toLowerCase() ? existing.fabric : ''),
       thickTouched: !!existing.thickness, sleevesTouched: !!existing.sleeves,
       thickness: existing.thickness || (usesThick(existing.category) ? E.defaultThickness(existing.category, existing.subtype, existing.fabric) : ''),
-      sleeves: existing.sleeves || (existing.category === 'tops' ? (E.isSleeveless(existing) ? 'Sleeveless' : 'Sleeved') : ''),
+      sleeves: existing.sleeves || (hasSleeves(existing.category) ? (E.isSleeveless(existing) ? 'Sleeveless' : 'Sleeved') : ''),
       scentMood: E.scentsOf(existing), perfumeMoods: E.perfumeMoodsOf(existing), perfMoodTouched: !!(existing.perfumeMoods || []).length,
       autoMsg: '', shapeSuggest: null, fabricError: false, categoryError: false
     };
@@ -1065,7 +1069,7 @@ const SECTIONS = {
 
   sil: d => E.usesSilhouette(d.category) ? `<span>Silhouette</span>${chipRow('silhouette', E.SILHOUETTES, d.silhouette, false)}` : '',
 
-  sleeves: d => d.category === 'tops' ? `<span>Sleeves <small>a sleeveless knit only layers over a thin sleeved top</small></span>${chipRow('sleeves', E.SLEEVES, d.sleeves, false)}` : '',
+  sleeves: d => hasSleeves(d.category) ? `<span>Sleeves <small>${d.category === 'dresses' ? 'a thin top only goes under a sleeveless dress' : 'a sleeveless knit only layers over a thin sleeved top'}</small></span>${chipRow('sleeves', E.SLEEVES, d.sleeves, false)}` : '',
 
   fabric: d => {
     if (!needsFabric(d.category)) return '';
@@ -1278,7 +1282,7 @@ function autoFromName() {
   }
   if (sug.fabric && !d.fabricTouched && needsFabric(d.category)) d.fabrics = [sug.fabric];
   autoSleeves(d);
-  if (sug.sleeves && !d.sleevesTouched && d.category === 'tops') d.sleeves = 'Sleeveless';
+  if (sug.sleeves && !d.sleevesTouched && hasSleeves(d.category)) d.sleeves = 'Sleeveless';
   autoThickness(d);
   if (sug.thickness && !d.thickTouched && usesThick(d.category)) d.thickness = sug.thickness;
   if (sig() !== before) {
@@ -1344,7 +1348,7 @@ async function aiFill() {
     if (r.subtype && !d.subtypeTouched && cat?.subtypes.includes(r.subtype)) { d.subtype = r.subtype; filled.push('type'); }
     if (r.fabric && !d.fabricTouched && needsFabric(d.category)) { d.fabrics = [r.fabric]; d.fabricError = false; filled.push('fabric'); }
     if (r.silhouette && E.usesSilhouette(d.category) && !d.silTouched) d.silhouette = r.silhouette;
-    if (r.sleeves && d.category === 'tops' && !d.sleevesTouched) d.sleeves = r.sleeves; else autoSleeves(d);
+    if (r.sleeves && hasSleeves(d.category) && !d.sleevesTouched) d.sleeves = r.sleeves; else autoSleeves(d);
     if (r.thickness && usesThick(d.category) && !d.thickTouched) { d.thickness = r.thickness; filled.push('thickness'); } else autoThickness(d);
     if (r.vibe.length && !d.vibeTouched && d.category !== 'perfume') d.vibe = r.vibe;
     if (d.category === 'perfume' && r.scents.length && !d.scentTouched) { d.scentMood = r.scents; autoPerfumeMoods(d); filled.push('scent accords'); }
@@ -1386,7 +1390,7 @@ async function saveDraft() {
     perfumeMoods: d.category === 'perfume' ? [...d.perfumeMoods] : [],
     fabric: needsFabric(d.category) ? d.fabrics.join(', ') : '', fabricMix: needsFabric(d.category) ? (d.fabricMix || '').trim() : '',
     thickness: usesThick(d.category) ? d.thickness : '',
-    sleeves: d.category === 'tops' ? d.sleeves : '',
+    sleeves: hasSleeves(d.category) ? d.sleeves : '',
     dressiness: CLOTHING_CATS.includes(d.category) ? (d.dressiness || '') : '',
     notes: (d.notes || '').trim(),
     createdAt: d.createdAt || Date.now(), updatedAt: Date.now()

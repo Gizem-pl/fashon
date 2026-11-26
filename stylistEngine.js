@@ -160,7 +160,8 @@ export function isSleeveless(item) {
   if (item?.sleeves === 'Sleeved') return false;
   const sub = item?.subtype || '';
   if (/(sleeveless|vest|corset|bustier)/i.test(sub)) return true;
-  return /(sleeveless|\btank\b|\bcami\b|camisole|\bvest\b)/i.test(item?.name || '');
+  if (item?.category === 'dresses' && sub === 'Slip') return true;
+  return /(sleeveless|\btank\b|\bcami\b|camisole|\bvest\b|strappy|spaghetti|pinafore)/i.test(item?.name || '');
 }
 /** Where a top sits in a stack: 0 base (blouse, tee, thin turtleneck), 1 knit (sweater, vest), 2 cardigan, 3 blazer / jacket. */
 function layerLevel(item) {
@@ -215,6 +216,53 @@ function orderStack(tops) {
   }
   return { ok: true, tops: s };
 }
+
+/* ---------- Tops with a dress ----------
+   Over a dress: a cardigan or a blazer goes over most dresses; a sweater goes over a light dress, which then reads as a skirt
+   below it (the knit over a slip dress), never over a knit or heavy one; nothing but a coat goes over a chunky dress.
+   Under a dress: a thin, close-fitting sleeved top (a turtleneck, a tee) under a sleeveless or slip dress — a cold-weather trick;
+   a collared blouse bunches under the straps.
+   At most one layer under and one over. With a dress, a base top (level 0) always goes under it and a knit, cardigan or blazer over it. */
+const dressUnder = o => o.dress ? o.top.filter(t => layerLevel(t) === 0) : [];
+const dressOver = o => o.dress ? o.top.filter(t => layerLevel(t) >= 1) : [];
+const isKnitDress = d => d?.subtype === 'Knit dress' || softWool(d);
+/** Can these tops be worn with this dress? Returns { ok, tops (under first, then over), penalty, reason }. */
+function dressStack(dress, tops) {
+  const under = tops.filter(t => layerLevel(t) === 0), over = tops.filter(t => layerLevel(t) >= 1);
+  const no = reason => ({ ok: false, tops, penalty: 0, reason });
+  if (under.length > 1 || over.length > 1) return no(`One top under ${dress.name} and one over it is the most it takes.`);
+  const u = under[0], o = over[0], td = thicknessOf(dress), bare = isSleeveless(dress);
+  let penalty = 0;
+  if (u) {
+    if (!bare) return no(`${u.name} only goes under a sleeveless dress such as a slip dress — ${dress.name} is better on its own or with a cardigan over it.`);
+    if (isSleeveless(u)) return no(`${u.name} under ${dress.name} adds nothing — the top under a sleeveless dress needs sleeves.`);
+    if (u.subtype === 'Blouse / Shirt') return no(`${u.name} would bunch under ${dress.name} — under a dress, a thin tee or turtleneck sits flat.`);
+    if (thicknessOf(u) > 1) return no(`${u.name} is too thick to go under ${dress.name} — keep the layer underneath thin.`);
+    penalty += COLD ? 0.8 : -0.5;                                  // warm arms and neck in the cold; pointless in the heat
+  }
+  if (o) {
+    const lo = layerLevel(o);
+    if (td === 3) return no(`${dress.name} is too thick to wear anything over it but a coat.`);
+    if (lo === 1) {
+      if (td > 1 || isKnitDress(dress)) return no(`${o.name} over ${dress.name} is too bulky — a sweater only goes over a light dress, which then reads as a skirt.`);
+      if (u) return no(`${o.name} over ${dress.name} with ${u.name} underneath is one layer too many — pick the sweater or the top underneath.`);
+      if (isSleeveless(o) && bare) return no(`${o.name} over a sleeveless dress leaves bare arms under a knit vest — wear the vest over a dress with sleeves.`);
+      penalty += bare && !isSleeveless(o) ? 1 : dress.subtype === 'Shirt dress' ? 0.6 : 0.3;   // the knit over a slip dress is the classic
+      if (dress.subtype === 'Wrap') penalty -= 0.8;                // it hides the wrap
+    } else {
+      penalty += lo === 2 ? 0.8 : 0.6;                             // a cardigan, or a blazer, over a dress
+      if (lo === 2 && isKnitDress(dress)) penalty -= 0.6;          // knit on knit
+      if (thicknessOf(o) === 3 && td >= 2) penalty -= 1;           // a chunky cardigan over a wool dress: heavy
+    }
+  }
+  return { ok: true, tops: [...under, ...over], penalty, reason: '' };
+}
+/** The dress or tops from the inside out, for what sits under a coat. */
+const torsoStack = o => o.dress ? [...dressUnder(o), o.dress, ...dressOver(o)] : o.top;
+/** The torso piece you see most: the layer over a dress, else the dress; the outer top otherwise. */
+const visibleTorso = o => o.dress ? dressOver(o)[0] || o.dress : o.top[o.top.length - 1];
+/** What sits at the neck: a top under the dress, a sweater over it, or the dress itself (an open cardigan or blazer shows the dress). */
+const necklineOf = o => o.dress ? dressUnder(o)[0] || dressOver(o).find(t => layerLevel(t) === 1) || o.dress : o.top[0];
 
 /** Soft penalty for a coat/jacket over what is underneath it. */
 function outerLayerPenalty(under, outer) {
@@ -669,6 +717,9 @@ function pairScore(a, b, mood, intent) {
      colours apart, "Too bulky" means one worn inside the other (or with the other) is too much — not that the clothes were too warm,
      so knits stay in for winter. Reasons about each piece ("too thin", "too casual", "too dressy") stay about each piece.
      The Studio then shows a repeat of a good look before it puts those two together again; liking them together later lifts it.
+   - on a 👍 it is the other way round: one piece singled out is "this piece makes it" (it and its pairings in this look are liked,
+     the rest of the look is not credited), two or more are "these go together" (mostly the pairings among them). A reason such as
+     "Colours work" or "Great proportions" is then about those pieces. Picking nothing likes the whole look.
    A dislike that warmth or dressiness explains does not count against the combination: it may be right in another month or for another occasion.
    When two reasons contradict each other, the newer one wins. Everything fades slowly (half after a year), so taste can change.
    The person's own verdict always weighs more than the AI's. */
@@ -713,11 +764,12 @@ export function reasonNote(tag, occasion = '') {
 
 /** With two or more pieces picked, does this reason blame them together? Not "too thin", "too casual", "too dressy": those are about each piece. */
 export const isTogetherTag = t => { const r = REASONS[t]; return !!r && r.dir < 0 && (r.bulk || !['warmth', 'dress'].includes(r.kind)); };
-/** What singling out pieces will teach, in a few words. names: the picked pieces; tags: the reasons given. */
-export function pickNote(names = [], tags = [], occasion = '') {
+/** What singling out pieces will teach, in a few words. names: the picked pieces; tags: the reasons given; liked: on a 👍. */
+export function pickNote(names = [], tags = [], occasion = '', liked = false) {
   if (!names.length) return '';
-  if (names.length === 1) return `${names[0]} paired differently`;
   const list = `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  if (liked) return names.length === 1 ? `more looks around ${names[0]}` : `${list} together more often`;
+  if (names.length === 1) return `${names[0]} paired differently`;
   if (!tags.length || tags.some(isTogetherTag)) return `${list} kept apart`;
   const says = tags.map(t => reasonNote(t, occasion)).filter(Boolean);
   return says.length ? `${list}: ${says.join(', ')}` : '';
@@ -988,7 +1040,11 @@ export function learnFromWears(wears = [], items = [], votes = []) {
     const tags = [...new Set(v.tags || [])].filter(t => REASONS[t]);
     const explained = tags.map(t => absorbReason(m, ev, t, ctx, 1));
     if (v.vote > 0) {
-      addCombo(m, pieces, 0.9 * w * (tags.includes('Very me') ? 1.5 : 1));
+      // pieces singled out on a 👍: one is "this piece makes it" (it, and it with the rest of the look), two or more are
+      // "these go together" (mostly their pairing, a little the rest of the look); none is the whole look, as before
+      const lift = 0.9 * w * (tags.includes('Very me') ? 1.5 : 1);
+      if (ctx.together) { addCombo(m, pieces.filter(p => blamed.has(p.id)), lift); addCombo(m, pieces, 0.3 * lift); }
+      else addCombo(m, pieces, lift, blamed);
       likedTogether(ev, pieces, v.at);
       if (ctx.occ && !tags.includes('Right for the occasion')) ev.dress.push({ at: v.at, key: ctx.occ, kind: 'ok', d: dressLevel(pieces), w: 0.4 * w });
       continue;
@@ -1158,10 +1214,11 @@ const CLOTHING_SLOTS = new Set(['top', 'bottom', 'dress', 'outer', 'shoes']);
 
 function emptyOutfit() { return { top: [], bottom: null, dress: null, outer: null, shoes: null, jewelry: [], warnings: [] }; }
 
+/** Put a chosen piece in its place. A top chosen with a dress has to work with that dress (see dressStack), so the dress is placed first. */
 function placeCore(outfit, item) {
   const slot = categoryById(item.category)?.slot;
   if (slot === 'top') {
-    const st = orderStack([...outfit.top, item]);
+    const st = outfit.dress ? dressStack(outfit.dress, [...outfit.top, item]) : orderStack([...outfit.top, item]);
     if (st.ok) outfit.top = st.tops; else outfit.warnings.push(st.reason);
   }
   else if (slot === 'bottom' || slot === 'dress' || slot === 'outer' || slot === 'shoes') { if (!outfit[slot]) outfit[slot] = item; }
@@ -1243,9 +1300,9 @@ function metalOf(i) {
 
 /** One or two pieces from the closet: earrings first, then a necklace (not with a high neck) or a bracelet — same metal. */
 function pickJewelry(o, items, mood, intent, avoid) {
-  const neck = o.dress || o.top[0];
+  const neck = necklineOf(o);
   const high = isHighNeck(neck);
-  const anchor = o.top[o.top.length - 1] || o.dress || o.bottom;
+  const anchor = visibleTorso(o) || o.bottom;
   const cands = items.filter(i => i.category === 'jewelry' && jewelKind(i) && !(high && jewelKind(i) === 'Necklace'));
   if (!cands.length) return [];
   const base = j => vibeScore(j, mood) + (anchor ? colourMatch(j, anchor, mood).s * 0.5 : 0);
@@ -1260,13 +1317,22 @@ function pickJewelry(o, items, mood, intent, avoid) {
 
 function completeOutfit(core, items, mood, intent, avoid) {
   const o = emptyOutfit();
-  core.forEach(c => placeCore(o, c));
+  [...core].sort((a, b) => (slotOf(b) === 'dress') - (slotOf(a) === 'dress')).forEach(c => placeCore(o, c));   // a dress first, so the tops are checked against it
   const pool = slot => items.filter(i => categoryById(i.category)?.slot === slot);
   const hasCoreIds = new Set(core.map(c => c.id));
   const notCore = arr => arr.filter(i => !hasCoreIds.has(i.id));
 
   if (!o.dress) {
-    if (o.top.length && !o.bottom) {
+    // a cardigan, sweater or blazer goes over a dress too, a thin top under a slip dress: some tries build the top on a dress
+    // instead of a skirt or trousers (the editorial look more often), and the mirror check judges both
+    const onDress = o.top.length && !o.bottom && JIT > 0 && Math.random() < (intent === 'editorial' ? 0.4 : 0.2)
+      ? notCore(pool('dress')).filter(d => dressStack(d, o.top).ok && !keptApart(d, o.top)) : [];
+    if (onDress.length) {
+      const outerTop = o.top[o.top.length - 1];
+      o.dress = pickBest(onDress, d => pairScore(outerTop, d, mood, intent) + dressStack(d, o.top).penalty
+        + 0.5 * (partFit('torso', [...o.top, d]) + partFit('legs', [d])), avoid);
+      o.top = dressStack(o.dress, o.top).tops;
+    } else if (o.top.length && !o.bottom) {
       o.bottom = pickBest(notCore(pool('bottom')), b => proportionScore(o.top[0], b, intent) * 1.3 + pairScore(o.top[0], b, mood, intent) + partFit('legs', [b]), avoid);
     } else if (o.bottom && !o.top.length) {
       const t = pickBest(notCore(pool('top')), t => proportionScore(t, o.bottom, intent) * 1.3 + pairScore(t, o.bottom, mood, intent) + mainTopBonus(t) + 0.5 * partFit('torso', [t]), avoid);
@@ -1314,8 +1380,30 @@ function completeOutfit(core, items, mood, intent, avoid) {
     }
   }
 
+  // A dress: a cardigan, blazer or (over a light dress) a sweater over it, and in the cold a thin top under a slip dress.
+  // The classic look adds one when the dress alone is too thin for the time of year; the editorial one may add one in any
+  // weather (the heat rules out the knits) and up to two in the cold. As with tops, some tries go without.
+  if (o.dress && !o.bottom) {
+    const torsoFit = tops => partFit('torso', [...tops, o.dress]);
+    const must = torsoFit(o.top) < -0.5 || (COLD && isSleeveless(o.dress) && !o.top.length);
+    let maxTops = intent === 'editorial' ? (COLD ? 2 : 1) : (COLD || must ? 1 : 0);
+    if (JIT > 0 && Math.random() < 0.4) maxTops = Math.max(o.top.length, must ? 1 : 0, maxTops - 1);
+    while (o.top.length < maxTops) {
+      const layer = pickBest(
+        notCore(pool('top')).filter(t => !o.top.some(x => x.id === t.id) && dressStack(o.dress, [...o.top, t]).ok && !keptApart(t, [o.dress, ...o.top])),
+        t => pairScore(t, o.dress, mood, intent) + dressStack(o.dress, [...o.top, t]).penalty + o.top.reduce((n, x) => n + learnedPair(x, t, false), 0)
+          + (COLD && fabricInfo(t.fabric)?.warmth === 'warm' ? 0.6 : 0)
+          + (intent === 'editorial' && (t.silhouette === 'Relaxed' || t.silhouette === 'Voluminous') ? 0.8 : 0)
+          + torsoFit([...o.top, t]),
+        avoid, 0.8
+      );
+      if (!layer || torsoFit([...o.top, layer]) < torsoFit(o.top) - 1) break;
+      o.top = dressStack(o.dress, [...o.top, layer]).tops;
+    }
+  }
+
   if (!o.outer && pool('outer').length && base) {
-    const under = o.dress ? [o.dress] : o.top;
+    const under = torsoStack(o);
     const neckline = under[under.length - 1];   // what shows at the collar and front of an open coat
     // what they taught about this coat over these very pieces ("that blouse under this coat is too bulky") counts too, not only the bottom
     o.outer = pickBest(pool('outer'), c => pairScore(c, anchor, mood, intent) + (neckline && neckline !== anchor ? colourMatch(c, neckline, mood).s * 0.8 : 0)
@@ -1397,9 +1485,15 @@ function proportionNote(o, intent) {
   const top = [...tops].reverse().find(t => layerLevel(t) < 2) || tops[tops.length - 1];
   const lines = [];
   if (dress) {
-    lines.push(dress.silhouette === 'Fitted'
+    const over = dressOver(o)[0], under = dressUnder(o)[0];
+    if (over && layerLevel(over) === 1)   // the knit covers the bodice: the dress becomes the skirt
+      lines.push(`${nm(over)} goes over ${nm(dress)}, so the dress reads as a skirt below it — tuck the front of the knit in a little, or push it up to the waist, so your waist still shows.`);
+    else lines.push(dress.silhouette === 'Fitted'
       ? `${nm(dress)} already skims the body, so keep everything else simple and let your 70 cm waist stay the focal point.`
       : `${nm(dress)} has ease through the body — define the waist (a belt, or a small gather of fabric at the back) so the shape reads intentional rather than shapeless.`);
+    if (over && layerLevel(over) === 2) lines.push(`Wear ${nm(over)} open over ${nm(dress)}, or buttoned only at the top, so the line of the dress still shows.`);
+    if (over && layerLevel(over) === 3) lines.push(`Put ${nm(over)} over ${nm(dress)}, open, with the sleeves pushed up a little — it sharpens the dress without hiding it.`);
+    if (under) lines.push(`${nm(under)} goes under ${nm(dress)}: its sleeves and neckline frame the dress and keep you warm — keep it thin and close-fitting so nothing bunches under the straps.`);
   } else if (top && bottom) {
     const t = top.silhouette, b = bottom.silhouette;
     if (b === 'Voluminous' && t === 'Fitted')
@@ -1419,7 +1513,7 @@ function proportionNote(o, intent) {
   } else if (bottom) {
     lines.push(`Build around ${nm(bottom)}: a fitted or neatly tucked top keeps the proportions clean.`);
   }
-  if (tops.length > 1) lines.push(layeringLine(tops));
+  if (!dress && tops.length > 1) lines.push(layeringLine(tops));
   return lines.join(' ');
 }
 
@@ -1466,13 +1560,14 @@ function colourSentence(p, q, mood) {
   return text.charAt(0).toUpperCase() + text.slice(1) + depth + '.';
 }
 
-/** The colours of the main pairing (top and bottom, or a dress and its coat), and the coat if it adds something worth saying. */
+/** The colours of the main pairing (top and bottom, a dress and the top with it, or a dress and its coat), and the coat if it adds something worth saying. */
 function colourNote(o, mood) {
   const top = o.top[o.top.length - 1];
-  const main = top && o.bottom ? [top, o.bottom] : o.dress && o.outer ? [o.dress, o.outer] : o.dress && o.shoes ? [o.dress, o.shoes] : null;
+  const withDress = o.dress && (dressOver(o)[0] || dressUnder(o)[0]);
+  const main = top && o.bottom ? [top, o.bottom] : withDress ? [withDress, o.dress] : o.dress && o.outer ? [o.dress, o.outer] : o.dress && o.shoes ? [o.dress, o.shoes] : null;
   if (!main) return '';
   const lines = [colourSentence(main[0], main[1], mood)];
-  const under = o.dress || top;
+  const under = visibleTorso(o);
   if (o.outer && under && !main.includes(o.outer) && /^(stark|dark|whites|classic)/.test(colourMatch(o.outer, under, mood).why))
     lines.push(colourSentence(o.outer, under, mood));
   return [...new Set(lines.filter(Boolean))].join(' ');
@@ -1541,7 +1636,7 @@ function beltNote(finish, o, intent) {
 
 function jewelryNote(mood, o) {
   const js = o.jewelry || [];
-  const neckItem = o.dress || o.top[0];
+  const neckItem = necklineOf(o);
   const neck = neckItem?.subtype || '';
   if (js.length) {
     const m = metalOf(js[0]);
@@ -1732,9 +1827,13 @@ function pairWeight(o, a, b) {
   let w = 1;
   if (sa === 'shoes' || sb === 'shoes') w = [sa, sb].some(x => x === 'bottom' || x === 'dress') ? 0.7 : 0.15;
   else if (sa === 'outer' || sb === 'outer') w = 0.8;
-  const under = p => o.top.indexOf(p) >= 0 && o.top.indexOf(p) < o.top.length - 1;
+  // with a dress, only the top under it is half hidden (it shows at the neck and arms); a knit over a dress is seen in full
+  const under = p => o.dress ? dressUnder(o).includes(p) : o.top.indexOf(p) >= 0 && o.top.indexOf(p) < o.top.length - 1;
   return under(a) || under(b) ? w * 0.5 : w;
 }
+/** A dress on its own is balanced by design: about what a good top-and-bottom pairing earns for proportion and contrast,
+    so a dress with or without a layer, or a cardigan over a dress or over a skirt, are judged on the same scale. */
+const DRESS_BALANCE = 2.8;
 
 /** Every pair of pieces, not only each piece against one anchor. */
 function allPairs(pieces) { const out = []; for (let i = 0; i < pieces.length; i++) for (let j = i + 1; j < pieces.length; j++) out.push([pieces[i], pieces[j]]); return out; }
@@ -1767,19 +1866,25 @@ function outfitScore(o, mood, intent, target) {
   // proportion and contrast of the main pairing
   const top = o.top[o.top.length - 1];
   if (top && o.bottom) s += proportionScore(top, o.bottom, intent) * 1.1 + contrastScore(top, o.bottom, intent) * 0.6;
+  else if (o.dress) {   // a knit, cardigan or blazer over a dress is judged like a top over a skirt
+    const over = dressOver(o)[0];
+    s += over ? proportionScore(over, o.dress, intent) * 1.1 + contrastScore(over, o.dress, intent) * 0.6 : DRESS_BALANCE;
+  }
   // one shared vibe running through most of the outfit
   const vc = {}; clothes.forEach(p => (p.vibe || []).forEach(v => { vc[v] = (vc[v] || 0) + 1; }));
   const shared = Object.entries(vc).filter(([v, n]) => n >= Math.ceil(clothes.length / 2));
   s += Math.min(2, shared.length * 0.6 + shared.filter(([v]) => mood.vibes.includes(v)).length * 0.5);
   // layering and coat sit right
-  if (o.top.length > 1) s += o.top.reduce((t, x, i) => t + o.top.slice(i + 1).reduce((u, y) => u + layerPair(x, y).penalty, 0), 0);
-  if (o.outer) s += outerLayerPenalty(o.dress ? [o.dress] : o.top, o.outer);
+  if (o.dress) { if (o.top.length) s += dressStack(o.dress, o.top).penalty; }
+  else if (o.top.length > 1) s += o.top.reduce((t, x, i) => t + o.top.slice(i + 1).reduce((u, y) => u + layerPair(x, y).penalty, 0), 0);
+  if (o.outer) s += outerLayerPenalty(torsoStack(o), o.outer);
   // rotation
   s += pieces.reduce((t, p) => t + rotation(p), 0);
   // the classic look should feel finished: shoes are a must
   if (!o.shoes) s -= 0.8;
   if (o.outer && WARM && thicknessOf(o.outer) >= 2) s -= 1.2;   // summer: a coat only if it is light
-  if (WARM && o.top.length > 1 && o.top.some(t => fabricInfo(t.fabric)?.warmth === 'warm' || thicknessOf(t) >= 2)) s -= 2;   // no knit layers in the heat
+  const layered = o.dress ? o.top.length > 0 : o.top.length > 1;
+  if (WARM && layered && o.top.some(t => fabricInfo(t.fabric)?.warmth === 'warm' || thicknessOf(t) >= 2)) s -= 2;   // no knit layers in the heat
   // warm enough for the time of year, and within what they taught: warmth, dressiness for this occasion, how many colours
   s += warmthScore(pieces) + dressBandPenalty(mean) + colourCapPenalty(pieces) + pieces.reduce((t, p) => t + slotDressFit(p), 0);
   return s;
